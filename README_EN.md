@@ -10,7 +10,7 @@
 
 | Light theme | Dark theme |
 |---|---|
-| ![Light theme](docs/screenshot-light.png) | ![Dark theme](docs/screenshot-dark.png) |
+| ![Light theme](docs/screenshot-light-en.png) | ![Dark theme](docs/screenshot-dark-en.png) |
 
 ## Features
 
