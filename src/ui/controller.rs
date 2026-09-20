@@ -4,6 +4,8 @@ use crate::core::config::{AppConfig, Host, Rule};
 use crate::core::stats::Stats;
 use crate::daemon::{self, Command};
 use crate::ui::view::{self, View};
+use rust_i18n::t;
+use rust_i18n::set_locale;
 use fltk::enums::CallbackTrigger;
 use fltk::{app, frame::Frame, group::Pack, input::Input, prelude::*};
 use std::cell::RefCell;
@@ -138,31 +140,30 @@ pub fn wire(
                 let _ = tx.send(Command::Shutdown);
                 if auto_proxy.is_checked() {
                     match sysproxy::disable() {
-                        Ok(()) => tracing::info!("系统代理已取消"),
-                        Err(e) => tracing::error!("取消系统代理失败: {e}"),
+                        Ok(()) => tracing::info!("{}", t!("log.sys_proxy_off")),
+                        Err(e) => tracing::error!("{}", t!("log.sys_proxy_off_fail", e = e.to_string())),
                     }
                 }
-                status.set_label("● 已停止");
+                status.set_label(&t!("status_stopped"));
                 status.set_label_color(view::current_pal().subtext);
-                b.set_label("启动");
+                b.set_label(&t!("start"));
             } else {
                 let config = AppConfig {
                     listen_addr: listen_input.value(),
                     rules: rules_of(&model),
-                    theme: String::new(),
-                    auto_proxy: auto_proxy.is_checked(),
+                    ..Default::default()
                 };
                 let addr = config.listen_addr.clone();
                 *slot = Some((daemon::spawn(config, stats.clone()), addr.clone()));
                 if auto_proxy.is_checked() {
                     match sysproxy::enable(&addr) {
-                        Ok(()) => tracing::info!("系统代理已设置: socks={addr}"),
-                        Err(e) => tracing::error!("设置系统代理失败: {e}"),
+                        Ok(()) => tracing::info!("{}", t!("log.sys_proxy_on", addr = addr)),
+                        Err(e) => tracing::error!("{}", t!("log.sys_proxy_on_fail", e = e.to_string())),
                     }
                 }
-                status.set_label("● 运行中");
+                status.set_label(&t!("status_running"));
                 status.set_label_color(view::current_pal().ok);
-                b.set_label("停止");
+                b.set_label(&t!("stop"));
             }
         });
     }
@@ -174,7 +175,7 @@ pub fn wire(
             let mut config = AppConfig::init().unwrap_or_default();
             config.auto_proxy = auto_proxy.is_checked();
             if let Err(e) = config.save() {
-                tracing::error!("保存系统代理偏好失败: {e}");
+                tracing::error!("{}", t!("log.save_pref_fail", e = e.to_string()));
             }
         });
     }
@@ -210,23 +211,21 @@ pub fn wire(
         let auto_proxy = v.auto_proxy.clone();
         let stats = stats.clone();
         v.save_btn.set_callback(move |_| {
-            let config = AppConfig {
-                listen_addr: listen_input.value(),
-                rules: rules_of(&model),
-                theme: AppConfig::init().map(|c| c.theme).unwrap_or_default(),
-                auto_proxy: auto_proxy.is_checked(),
-            };
+            let mut config = AppConfig::init().unwrap_or_default();
+            config.listen_addr = listen_input.value();
+            config.rules = rules_of(&model);
+            config.auto_proxy = auto_proxy.is_checked();
             if let Err(e) = config.save() {
-                tracing::error!("保存 config.toml 失败: {e}");
+                tracing::error!("{}", t!("log.save_fail", e = e.to_string()));
                 return;
             }
-            tracing::info!("配置已保存到 config.toml");
+            tracing::info!("{}", t!("log.saved"));
             let mut slot = daemon_slot.borrow_mut();
             if let Some((tx, addr)) = slot.as_mut() {
                 if *addr == config.listen_addr {
                     let _ = tx.send(Command::SetRules(config.rules));
                 } else {
-                    tracing::info!("监听地址变化，重启代理");
+                    tracing::info!("{}", t!("log.addr_changed_restart"));
                     let _ = tx.send(Command::Shutdown);
                     *slot = Some((
                         daemon::spawn(config.clone(), stats.clone()),
@@ -246,8 +245,8 @@ pub fn wire(
                 let running = daemon_slot.borrow().is_some();
                 if running && auto_proxy.is_checked() {
                     match sysproxy::disable() {
-                        Ok(()) => tracing::info!("系统代理已取消"),
-                        Err(e) => tracing::error!("取消系统代理失败: {e}"),
+                        Ok(()) => tracing::info!("{}", t!("log.sys_proxy_off")),
+                        Err(e) => tracing::error!("{}", t!("log.sys_proxy_off_fail", e = e.to_string())),
                     }
                 }
             }
@@ -281,10 +280,31 @@ pub fn wire(
             if config.theme != theme {
                 config.theme = theme.to_string();
                 if let Err(e) = config.save() {
-                    tracing::error!("保存主题失败: {e}");
+                    tracing::error!("{}", t!("log.save_theme_fail", e = e.to_string()));
                 }
             }
-            tracing::info!("主题已切换");
+            tracing::info!("{}", t!("log.theme_switched"));
+        });
+    }
+
+    // 语言切换：zh↔en 互切，存配置，全量重刷文案
+    {
+        let model = model.clone();
+        let daemon_slot = daemon_slot.clone();
+        let stats = stats.clone();
+        let v2 = v.clone_ref();
+        v.lang_btn.set_callback(move |_| {
+            let next = if &*rust_i18n::locale() == "zh" { "en" } else { "zh" };
+            set_locale(next);
+            let running = daemon_slot.borrow().is_some();
+            refresh_i18n(&v2, &model, running, &stats.snapshot());
+            let mut config = AppConfig::init().unwrap_or_default();
+            if config.language != next {
+                config.language = next.to_string();
+                if let Err(e) = config.save() {
+                    tracing::error!("{}", t!("log.save_lang_fail", e = e.to_string()));
+                }
+            }
         });
     }
 }
@@ -442,6 +462,7 @@ pub fn apply_theme(v: &View, model: &Model, daemon_slot: &DaemonSlot, dark: bool
     }
     view::style_ghost_btn(&mut v.add_btn.clone(), pal);
     view::style_primary_btn(&mut v.save_btn.clone(), pal);
+    view::style_ghost_btn(&mut v.lang_btn.clone(), pal);
     // 规则行
     for e in model.borrow().iter() {
         e.widget.clone().set_color(pal.card);
@@ -461,15 +482,57 @@ pub fn apply_theme(v: &View, model: &Model, daemon_slot: &DaemonSlot, dark: bool
     app::redraw();
 }
 
+/// 运行中切换语言：重刷所有静态文案 + 当前动态文案
+fn refresh_i18n(v: &View, model: &Model, running: bool, s: &crate::core::stats::StatsSnapshot) {
+    v.win.clone().set_label(&t!("app_title"));
+    v.title.clone().set_label(&t!("app_title"));
+    v.addr_label.clone().set_label(&t!("listen_addr"));
+    v.start_btn.clone().set_label(&t!(if running { "stop" } else { "start" }));
+    v.status
+        .clone()
+        .set_label(&t!(if running { "status_running" } else { "status_stopped" }));
+    v.auto_proxy.clone().set_label(&t!("sys_proxy"));
+    for (b, key) in v.theme_btns.iter().zip(["theme_system", "theme_dark", "theme_light"]) {
+        b.clone().set_label(&t!(key));
+    }
+    view::refresh_theme_btns(&mut v.theme_btns.clone(), view::current_theme_sel(), view::current_pal());
+    v.lang_btn.clone().set_label(&t!("lang_switch"));
+    let stats = [(&v.stats[0], "stats_active", format!("{}", s.active)), (&v.stats[1], "stats_total", format!("{}", s.total))];
+    for (f, key, val) in stats {
+        f.clone().set_label(&format!("{}  {}", t!(key), val));
+    }
+    v.stats[2].clone().set_label(&format!("{}  {}", t!("stats_up"), fmt_bytes(s.bytes_up)));
+    v.stats[3].clone().set_label(&format!("{}  {}", t!("stats_down"), fmt_bytes(s.bytes_down)));
+    v.rule_cap.clone().set_label(&t!("rules_title"));
+    for (f, key) in v.col_header_frames.iter().zip([
+        "col_match_addr",
+        "col_match_prefix",
+        "",
+        "col_fwd_addr",
+        "col_fwd_prefix",
+    ]) {
+        if !key.is_empty() {
+            f.clone().set_label(&t!(key));
+        }
+    }
+    v.add_btn.clone().set_label(&t!("add_rule"));
+    v.save_btn.clone().set_label(&t!("save_apply"));
+    v.log_cap.clone().set_label(&t!("log_title"));
+    for e in model.borrow().iter() {
+        e.del_btn.clone().set_label(&t!("rule_delete"));
+    }
+    app::redraw();
+}
+
 /// 统计栏每秒刷新
 pub fn start_stats_timer(stats: Arc<Stats>, frames: [Frame; 4]) {
     let [mut active, mut total, mut up, mut down] = frames;
     app::add_timeout3(1.0, move |h| {
         let s = stats.snapshot();
-        active.set_label(&format!("活跃连接  {}", s.active));
-        total.set_label(&format!("总连接  {}", s.total));
-        up.set_label(&format!("上行  {}", fmt_bytes(s.bytes_up)));
-        down.set_label(&format!("下行  {}", fmt_bytes(s.bytes_down)));
+        active.set_label(&format!("{}  {}", t!("stats_active"), s.active));
+        total.set_label(&format!("{}  {}", t!("stats_total"), s.total));
+        up.set_label(&format!("{}  {}", t!("stats_up"), fmt_bytes(s.bytes_up)));
+        down.set_label(&format!("{}  {}", t!("stats_down"), fmt_bytes(s.bytes_down)));
         app::repeat_timeout3(1.0, h);
     });
 }

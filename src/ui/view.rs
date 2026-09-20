@@ -1,6 +1,7 @@
 //! 纯 UI：配色、样式、控件构建。不含任何业务逻辑。
 
 use crate::core::config::{AppConfig, Rule};
+use rust_i18n::t;
 use fltk::enums::{Align, Color, Event, FrameType};
 use fltk::app;
 use fltk::group::{Flex, Pack, PackType, Scroll};
@@ -149,6 +150,7 @@ pub struct View {
     pub auto_proxy: CheckButton,
     pub seg: Flex,
     pub theme_btns: Vec<Button>,
+    pub lang_btn: Button,
     pub stats_card: Flex,
     pub stats: [Frame; 4],
     pub rules_card: Flex,
@@ -182,6 +184,7 @@ impl View {
             auto_proxy: self.auto_proxy.clone(),
             seg: self.seg.clone(),
             theme_btns: self.theme_btns.clone(),
+            lang_btn: self.lang_btn.clone(),
             stats_card: self.stats_card.clone(),
             stats: self.stats.clone(),
             rules_card: self.rules_card.clone(),
@@ -276,7 +279,7 @@ fn attach_drag<W: WidgetBase>(w: &mut W, win: &Window) {
 /// 构建整个窗口（不 show，由调用方决定时机）
 pub fn build(config: &AppConfig, pal: Palette) -> View {
     let mut win = Window::default().with_size(800, 780).center_screen();
-    win.set_label("开发路由");
+    win.set_label(&t!("app_title"));
     win.set_border(false); // 无边框
     // 窗口/任务栏图标（内嵌，无外部文件依赖）
     if let Ok(icon) = fltk::image::PngImage::from_data(include_bytes!("../../assets/app-icon-64.png")) {
@@ -298,7 +301,7 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
         icon.set_frame(FrameType::NoBox);
     }
     title_bar.fixed(&icon, 26);
-    let mut title = Frame::default().with_label("开发路由");
+    let mut title = Frame::default().with_label(&t!("app_title"));
     title.set_label_size(16);
     title.set_label_color(pal.text);
     title.set_align(Align::Left | Align::Inside);
@@ -332,7 +335,7 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     header.set_pad(9);
     header.set_margin(6);
 
-    let mut addr_label = Frame::default().with_label("监听地址");
+    let mut addr_label = Frame::default().with_label(&t!("listen_addr"));
     addr_label.set_label_color(pal.subtext);
     addr_label.set_align(Align::Right | Align::Inside);
     header.fixed(&addr_label, 62);
@@ -343,14 +346,14 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
 
     let mut start_btn = Button::default();
     style_primary_btn(&mut start_btn, pal);
-    start_btn.set_label("启动");
+    start_btn.set_label(&t!("start"));
     header.fixed(&start_btn, 76);
 
-    let mut status = Frame::default().with_label("● 已停止");
+    let mut status = Frame::default().with_label(&t!("status_stopped"));
     status.set_label_color(pal.subtext);
     header.fixed(&status, 70);
 
-    let mut auto_proxy = CheckButton::default().with_label("系统代理");
+    let mut auto_proxy = CheckButton::default().with_label(&t!("sys_proxy"));
     auto_proxy.set_label_color(pal.text);
     auto_proxy.set_label_size(13);
     auto_proxy.visible_focus(false);
@@ -371,13 +374,18 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     seg.set_pad(0);
     seg.set_margin(3);
     let mut theme_btns: Vec<Button> = Vec::new();
-    for label in ["跟随系统", "深色", "浅色"] {
-        let mut b = Button::default().with_label(label);
+    for label in [t!("theme_system"), t!("theme_dark"), t!("theme_light")] {
+        let mut b = Button::default().with_label(&label);
         b.visible_focus(false);
         theme_btns.push(b);
     }
     seg.end();
     header.fixed(&seg, 196);
+    // 语言切换按钮：显示目标语言（点击切过去）
+    let mut lang_btn = Button::default().with_label(&t!("lang_switch"));
+    style_ghost_btn(&mut lang_btn, pal);
+    lang_btn.visible_focus(false);
+    header.fixed(&lang_btn, 56);
     header.end();
     col.fixed(&header, 52);
 
@@ -386,8 +394,8 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     style_card(&mut stats_card, pal);
     stats_card.set_margin(10);
     let mut stat_frames = Vec::new();
-    for label in ["活跃连接", "总连接", "上行", "下行"] {
-        let mut f = Frame::default().with_label(&format!("{label}  -"));
+    for key in ["stats_active", "stats_total", "stats_up", "stats_down"] {
+        let mut f = Frame::default().with_label(&format!("{}  -", t!(key)));
         f.set_label_color(pal.subtext);
         f.set_label_size(13);
         stat_frames.push(f);
@@ -401,21 +409,21 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     style_card(&mut rules_card, pal);
     rules_card.set_pad(6);
     rules_card.set_margin(12);
-    let cap = caption("转发规则", pal);
+    let cap = caption(&t!("rules_title"), pal);
     rules_card.fixed(&cap, 26);
     // 列表头：与下方输入框逐列对齐（同几何参数：margin 4 / pad 10 / 固定列宽）
     let mut col_header = Flex::default().row();
     col_header.set_margin(4);
     col_header.set_pad(10);
     let mut col_header_frames = Vec::new();
-    for (text, w) in [
-        ("匹配地址", 190),
-        ("路径前缀", 110),
+    for (key, w) in [
+        ("col_match_addr", 190),
+        ("col_match_prefix", 110),
         ("", 24),
-        ("转发地址", 190),
-        ("转发路径前缀", 110),
+        ("col_fwd_addr", 190),
+        ("col_fwd_prefix", 110),
     ] {
-        let mut f = Frame::default().with_label(text);
+        let mut f = Frame::default().with_label(&t!(key));
         f.set_label_color(pal.subtext);
         f.set_label_size(12);
         f.set_align(Align::Left | Align::Inside);
@@ -449,10 +457,10 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     let mut rules_bar = Flex::default().row();
     rules_bar.set_pad(6);
     Frame::default(); // 弹性填充，把按钮推到右侧
-    let mut add_btn = Button::default().with_label("+ 添加规则");
+    let mut add_btn = Button::default().with_label(&t!("add_rule"));
     style_ghost_btn(&mut add_btn, pal);
     rules_bar.fixed(&add_btn, 96);
-    let mut save_btn = Button::default().with_label("保存并生效");
+    let mut save_btn = Button::default().with_label(&t!("save_apply"));
     style_primary_btn(&mut save_btn, pal);
     rules_bar.fixed(&save_btn, 96);
     rules_bar.end();
@@ -464,7 +472,7 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     style_card(&mut log_card, pal);
     log_card.set_pad(6);
     log_card.set_margin(12);
-    let lcap = caption("日志", pal);
+    let lcap = caption(&t!("log_title"), pal);
     log_card.fixed(&lcap, 26);
     let mut log_disp = TextDisplay::default();
     log_disp.set_frame(FrameType::RFlatBox);
@@ -491,6 +499,7 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
         auto_proxy,
         seg,
         theme_btns,
+        lang_btn,
         stats_card,
         stats,
         rules_card,
@@ -554,7 +563,7 @@ pub fn add_rule_row_widgets(pack: &Pack, pal: Palette, idx: i32, rule: &Rule) ->
     f_prefix.set_value(&rule.forward.path_prefix);
     row.fixed(&f_prefix, 110);
 
-    let mut del_btn = Button::default().with_label("删除");
+    let mut del_btn = Button::default().with_label(&t!("rule_delete"));
     del_btn.set_frame(FrameType::RFlatBox);
     del_btn.set_down_frame(FrameType::RFlatBox);
     del_btn.set_color(pal.input_bg);

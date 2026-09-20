@@ -6,6 +6,8 @@ mod daemon;
 mod libs;
 mod ui;
 
+rust_i18n::i18n!("locales", fallback = "zh");
+
 /// headless 模式下挂到父控制台，让日志能输出到终端
 #[cfg(target_os = "windows")]
 fn attach_parent_console() {
@@ -42,6 +44,12 @@ fn attach_parent_console() {
 fn attach_parent_console() {}
 
 fn main() -> anyhow::Result<()> {
+    // 语言：两种模式统一在入口初始化（读取失败回退 auto → 系统语言）
+    let lang = core::config::AppConfig::init()
+        .map(|c| c.language)
+        .unwrap_or_else(|_| "auto".into());
+    rust_i18n::set_locale(core::config::resolve_locale(&lang));
+
     if std::env::args().any(|a| a == "--headless") {
         attach_parent_console();
         libs::logs::init_default()?;

@@ -1,5 +1,7 @@
 # devroute（开发路由）
 
+[English](README_EN.md) | 中文
+
 <img src="assets/app-icon-256.png" width="96" align="right" />
 
 > 本地开发调试用的转发工具：**极致轻量，内存占用仅 3.5MB 起（无界面模式 1.6MB）**，2MB 单文件即拷即用。单端口同时支持 SOCKS5 和 HTTP 代理协议，按 `Host + 路径前缀` 转发并支持路径重写。带 GUI（规则编辑 / 实时统计 / 日志 / 系统代理联动），Rust + FLTK **纯原生实现，非 WebView（非 Tauri/Electron）**，不内嵌浏览器内核。
@@ -14,7 +16,7 @@
 
 - **双协议代理**：同一监听端口自动识别 SOCKS5 与 HTTP 代理（CONNECT + 绝对路径请求）
 - **规则转发**：按 `Host:Port` + 请求路径前缀匹配，转发到目标地址并重写路径前缀
-- **GUI 桌面端**（默认）：规则增删改、保存热重载、连接/流量统计、实时日志、一键系统代理、深浅色主题切换
+- **GUI 桌面端**（默认）：规则增删改、保存热重载、连接/流量统计、实时日志、一键系统代理、深浅色主题、中英文界面
 - **轻量**：GUI 空闲约 3.5MB 内存（开启代理 ~4MB，随请求量增长）；`--headless` 无界面模式启动仅 ~1.6MB，适合常驻
 - 自动生成默认 `config.toml`，配置文件改动即时生效
 - 转发失败可返回 503 或回退原始地址
@@ -58,6 +60,7 @@ cargo build --release
 - **系统代理**：勾选后，启动时代理自动写入系统设置（Windows 注册表 / macOS networksetup / Linux gsettings），停止或关窗时自动取消
 - **转发规则**：匹配地址 + 路径前缀 → 转发地址 + 路径前缀，点击"保存并生效"写入 `config.toml` 并热重载（改监听地址会自动重启代理线程）
 - **主题**：右上角分段控件，跟随系统 / 深色 / 浅色，即时切换并记忆
+- **语言**：主题控件旁按钮，中英文互切，即时切换并记忆
 
 ## 配置规则
 
@@ -66,6 +69,7 @@ cargo build --release
 ```toml
 listen_addr = "127.0.0.1:1080"
 theme = "system"        # system | dark | light（GUI）
+language = "auto"       # auto | zh | en（GUI；auto = 跟随系统）
 auto_proxy = false      # 启动时自动设置系统代理（GUI）
 
 [[rules]]
