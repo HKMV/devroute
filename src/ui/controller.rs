@@ -346,24 +346,39 @@ mod sysproxy {
         set("", false)
     }
 
+/// 原代理配置备份（内存即可；进程被杀才会丢，那种极端情况手动关一下系统代理即可）
+/// 内容格式各平台自定义（key=value 行）
+static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+    const KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
     #[cfg(target_os = "windows")]
     fn set(addr: &str, on: bool) -> anyhow::Result<()> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
         let run = |args: &[&str]| {
             std::process::Command::new("reg")
                 .args(args)
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
         };
-        run(&["add", key, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", if on { "1" } else { "0" }, "/f"])?;
+
         if on {
+            // 备份原代理配置到内存（用户可能本来就有代理，如 Clash）
+            backup(&run)?;
+            run(&["add", KEY, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])?;
             // HTTP 代理（daemon 同时支持 SOCKS5 和 HTTP 代理协议）
-            run(&["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &addr, "/f"])?;
+            run(&["add", KEY, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &addr, "/f"])?;
             // 只豁免本机回环；内网网段（如 192.168.*）恰恰是调试目标，不能豁免
-            run(&["add", key, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "localhost;127.*;<local>", "/f"])?;
+            run(&["add", KEY, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "localhost;127.*;<local>", "/f"])?;
+        } else if BACKUP.lock().unwrap().is_some() {
+            // 恢复备份的原配置
+            restore(&run)?;
+        } else {
+            run(&["add", KEY, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])?;
         }
+
         // 通知运行中的程序（浏览器等）代理设置已变
         #[link(name = "wininet")]
         unsafe extern "C" {
@@ -376,26 +391,153 @@ mod sysproxy {
         Ok(())
     }
 
+    /// 读一个注册表值；不存在返回 None
+    #[cfg(target_os = "windows")]
+    fn read_value(out: &std::process::Output, name: &str) -> Option<String> {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix(name) {
+                let rest = rest.trim_start();
+                if let Some((_, value)) = rest.split_once(|c: char| c.is_whitespace()) {
+                    // REG_SZ    value / REG_DWORD    0x1
+                    let value = value.trim_start();
+                    let value = value.strip_prefix("0x").unwrap_or(value);
+                    return Some(value.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(target_os = "windows")]
+    fn backup(run: &dyn Fn(&[&str]) -> std::io::Result<std::process::Output>) -> anyhow::Result<()> {
+        let mut content = String::new();
+        for name in ["ProxyEnable", "ProxyServer", "ProxyOverride"] {
+            let out = run(&["query", KEY, "/v", name])?;
+            if out.status.success() {
+                if let Some(v) = read_value(&out, name) {
+                    content.push_str(&format!("{name}={v}\n"));
+                    continue;
+                }
+            }
+            content.push_str(&format!("{name}=\n")); // 原本不存在
+        }
+        *BACKUP.lock().unwrap() = Some(content);
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn restore(run: &dyn Fn(&[&str]) -> std::io::Result<std::process::Output>) -> anyhow::Result<()> {
+        let content = BACKUP.lock().unwrap().take().unwrap_or_default();
+        for line in content.lines() {
+            let Some((name, value)) = line.split_once('=') else { continue };
+            if value.is_empty() {
+                // 原本不存在：删掉我们写入的值
+                let _ = run(&["delete", KEY, "/v", name, "/f"]);
+            } else if name == "ProxyEnable" {
+                run(&["add", KEY, "/v", name, "/t", "REG_DWORD", "/d", value, "/f"])?;
+            } else {
+                run(&["add", KEY, "/v", name, "/t", "REG_SZ", "/d", value, "/f"])?;
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     fn set(addr: &str, on: bool) -> anyhow::Result<()> {
         let sh = |args: &[&str]| std::process::Command::new("networksetup").args(args).output();
+        let get = |args: &[&str]| -> anyhow::Result<String> {
+            let out = sh(args)?;
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        };
         if on {
+            // 备份当前 socks 代理状态
+            let info = get(&["-getsocksfirewallproxy", "Wi-Fi"])?;
+            let mut b = String::new();
+            for line in info.lines() {
+                if let Some((k, v)) = line.split_once(':') {
+                    let k = k.trim();
+                    if matches!(k, "Enabled" | "Server" | "Port") {
+                        b.push_str(&format!("{}={}\n", k.to_lowercase(), v.trim()));
+                    }
+                }
+            }
+            *BACKUP.lock().unwrap() = Some(b);
+
             let (host, port) = addr.rsplit_once(':').unwrap_or((addr, "1080"));
             sh(&["-setsocksfirewallproxy", "Wi-Fi", host, port])?;
+            sh(&["-setsocksfirewallproxystate", "Wi-Fi", "on"])?;
+        } else if let Some(b) = BACKUP.lock().unwrap().take() {
+            // 恢复原配置
+            let mut enabled = "off".to_string();
+            let mut server = String::new();
+            let mut port = String::new();
+            for line in b.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    match k {
+                        "enabled" => enabled = if v == "Yes" { "on".into() } else { "off".into() },
+                        "server" => server = v.to_string(),
+                        "port" => port = v.to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            if enabled == "on" && !server.is_empty() {
+                sh(&["-setsocksfirewallproxy", "Wi-Fi", &server, &port])?;
+            }
+            sh(&["-setsocksfirewallproxystate", "Wi-Fi", &enabled])?;
+        } else {
+            sh(&["-setsocksfirewallproxystate", "Wi-Fi", "off"])?;
         }
-        sh(&["-setsocksfirewallproxystate", "Wi-Fi", if on { "on" } else { "off" }])?;
         Ok(())
     }
 
     #[cfg(target_os = "linux")]
     fn set(addr: &str, on: bool) -> anyhow::Result<()> {
         let sh = |args: &[&str]| std::process::Command::new("gsettings").args(args).output();
+        let get = |schema: &str, key: &str| -> String {
+            sh(&["get", schema, key])
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_matches('\'').to_string())
+                .unwrap_or_default()
+        };
         if on {
+            // 备份当前 GNOME 代理配置
+            let b = format!(
+                "mode={}\nhost={}\nport={}\n",
+                get("org.gnome.system.proxy", "mode"),
+                get("org.gnome.system.proxy.socks", "host"),
+                get("org.gnome.system.proxy.socks", "port"),
+            );
+            *BACKUP.lock().unwrap() = Some(b);
+
             let (host, port) = addr.rsplit_once(':').unwrap_or((addr, "1080"));
             sh(&["set", "org.gnome.system.proxy.socks", "host", host])?;
             sh(&["set", "org.gnome.system.proxy.socks", "port", port])?;
+            sh(&["set", "org.gnome.system.proxy", "mode", "manual"])?;
+        } else if let Some(b) = BACKUP.lock().unwrap().take() {
+            // 恢复原配置
+            let mut mode = "none".to_string();
+            let mut host = String::new();
+            let mut port = String::new();
+            for line in b.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    match k {
+                        "mode" => mode = v.to_string(),
+                        "host" => host = v.to_string(),
+                        "port" => port = v.to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            if !host.is_empty() {
+                sh(&["set", "org.gnome.system.proxy.socks", "host", &host])?;
+                sh(&["set", "org.gnome.system.proxy.socks", "port", &port])?;
+            }
+            sh(&["set", "org.gnome.system.proxy", "mode", &mode])?;
+        } else {
+            sh(&["set", "org.gnome.system.proxy", "mode", "none"])?;
         }
-        sh(&["set", "org.gnome.system.proxy", "mode", if on { "manual" } else { "none" }])?;
         Ok(())
     }
 }
@@ -549,5 +691,35 @@ fn fmt_bytes(n: u64) -> String {
         format!("{:.1} KB", n as f64 / KB as f64)
     } else {
         format!("{n} B")
+    }
+}
+
+#[cfg(all(test, windows))]
+mod sysproxy_tests {
+    use super::sysproxy;
+
+    // 会真实修改系统代理，默认不跑：cargo test -- --ignored sysproxy
+    #[test]
+    #[ignore = "真实修改系统代理"]
+    fn backup_restore_roundtrip() {
+        // 启用前原值
+        let before = reg_query("ProxyServer");
+        sysproxy::enable("127.0.0.1:9999").unwrap();
+        assert_eq!(reg_query("ProxyServer").as_deref(), Some("127.0.0.1:9999"));
+        assert_eq!(reg_query("ProxyEnable").as_deref(), Some("1"));
+        sysproxy::disable().unwrap();
+        assert_eq!(reg_query("ProxyServer"), before);
+    }
+
+    fn reg_query(name: &str) -> Option<String> {
+        let out = std::process::Command::new("reg")
+            .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", name])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines()
+            .find(|l| l.trim_start().starts_with(name))
+            .and_then(|l| l.split_whitespace().last())
+            .map(|s| s.strip_prefix("0x").unwrap_or(s).to_string())
     }
 }
