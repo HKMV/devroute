@@ -361,8 +361,8 @@ mod sysproxy {
         if on {
             // HTTP 代理（daemon 同时支持 SOCKS5 和 HTTP 代理协议）
             run(&["add", key, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &addr, "/f"])?;
-            // 本地地址不走代理
-            run(&["add", key, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "localhost;127.*;192.168.*;<local>", "/f"])?;
+            // 只豁免本机回环；内网网段（如 192.168.*）恰恰是调试目标，不能豁免
+            run(&["add", key, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "localhost;127.*;<local>", "/f"])?;
         }
         // 通知运行中的程序（浏览器等）代理设置已变
         #[link(name = "wininet")]

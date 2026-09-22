@@ -9,4 +9,4 @@ forward = { addr = "127.0.0.1:8686", path_prefix = "" }
 
 [[rules]]
 matcher = { addr = "192.168.120.181:81", path_prefix = "/api" }
-forward = { addr = "127.0.0.1:8886", path_prefix = "" }
+forward = { addr = "127.0.0.1:8801", path_prefix = "" }

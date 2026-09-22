@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 pub(crate) async fn forward_handle(
     client: TcpStream,
@@ -341,8 +341,13 @@ pub(crate) async fn handle_http_proxy(
 
     // 应用路由规则（按 host 匹配，路径前缀重写）
     let rule = route_engine.resolve_target_by_host(&target).await;
-    let (connect_addr, path) = plan_request(&target, &path, rule.as_ref());
-    debug!("HTTP proxy {method} {target}{path} -> {connect_addr}");
+    let (connect_addr, new_path) = plan_request(&target, &path, rule.as_ref());
+    if connect_addr != target {
+        info!("转发命中: {method} http://{target}{path} → {connect_addr}{new_path}");
+    } else {
+        debug!("HTTP proxy {method} {target}{path} 直连");
+    }
+    let path = new_path;
 
     let mut server = TcpStream::connect(&connect_addr)
         .await
@@ -361,6 +366,7 @@ pub(crate) async fn handle_http_proxy(
     }
     out.push_str("Connection: close\r\n\r\n");
     server.write_all(out.as_bytes()).await?;
+    drop(rule);
     // 头部之后可能已有 body 字节（如 POST），原样转发
     server.write_all(&buf[head_end..]).await?;
     stats.up(out.len() + buf.len() - head_end);
@@ -368,15 +374,18 @@ pub(crate) async fn handle_http_proxy(
     tunnel(client, server, &stats).await
 }
 
-/// 路由决策：返回 (实际连接地址, 重写后的路径)
+/// 路由决策：返回 (实际连接地址, 重写后的路径)。
+/// host 和路径前缀都命中才转发；只命中 host 但路径不匹配 → 直连原始地址
 fn plan_request(target: &str, path: &str, rule: Option<&RouteRule>) -> (String, String) {
     let Some(rule) = rule else {
         return (target.to_string(), path.to_string());
     };
+    if !path.starts_with(&rule.match_.prefix) {
+        return (target.to_string(), path.to_string());
+    }
     let new_path = if rule.forward.rewrite
         && !rule.match_.prefix.is_empty()
         && rule.match_.prefix != "/"
-        && path.starts_with(&rule.match_.prefix)
     {
         path.replacen(&rule.match_.prefix, &rule.forward.prefix, 1)
     } else {
@@ -432,9 +441,10 @@ mod tests {
 
     #[test]
     fn plan_with_rule_unmatched_prefix() {
+        // host 命中但路径前缀不匹配：直连原始地址
         let rule = rule();
         let (addr, path) = plan_request("example.com:80", "/other", Some(&rule));
-        assert_eq!(addr, "127.0.0.1:8686");
+        assert_eq!(addr, "example.com:80");
         assert_eq!(path, "/other");
     }
 

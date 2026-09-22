@@ -27,11 +27,28 @@ impl RouteRule {
         }
     }
     fn matches(&self, host: &str, prefix: &str) -> bool {
-        (prefix.starts_with(&self.match_.prefix))
-            && (host == self.match_.host || self.match_.host == "*")
+        prefix.starts_with(&self.match_.prefix) && self.match_host(host)
     }
-    fn match_host(&self, host: &str) -> bool {
-        host == self.match_.host || self.match_.host == "*"
+    /// 规则不写端口时默认匹配 80/443；写了端口则精确匹配。域名大小写不敏感。
+    // ponytail: 只支持 IPv4/域名，IPv6 字面量的冒号会误判为端口分隔
+    fn match_host(&self, target: &str) -> bool {
+        if self.match_.host == "*" {
+            return true;
+        }
+        let (t_host, t_port) = match target.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (target, None),
+        };
+        match self.match_.host.rsplit_once(':') {
+            Some((r_host, r_port)) => {
+                r_host.eq_ignore_ascii_case(t_host) && (t_port.is_none() || Some(r_port) == t_port)
+            }
+            // 不写端口：默认兼容 80/443
+            None => {
+                self.match_.host.eq_ignore_ascii_case(t_host)
+                    && matches!(t_port, None | Some("80") | Some("443"))
+            }
+        }
     }
 }
 
@@ -93,5 +110,31 @@ impl RouteEngine {
     pub(crate) async fn update_rules(&self, new_rules: Vec<RouteRule>) {
         let mut rules = self.rules.write().await;
         *rules = new_rules;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(host: &str) -> RouteRule {
+        RouteRule::new(host, "/api", "127.0.0.1:8686", "")
+    }
+
+    #[test]
+    fn host_matching() {
+        // 精确匹配
+        assert!(rule("example.com:81").match_host("example.com:81"));
+        assert!(!rule("example.com:81").match_host("example.com:80"));
+        // 不写端口：默认 80/443
+        assert!(rule("example.com").match_host("example.com:80"));
+        assert!(rule("example.com").match_host("example.com:443"));
+        assert!(!rule("example.com").match_host("example.com:81"));
+        // 大小写不敏感
+        assert!(rule("Example.COM").match_host("example.com:80"));
+        // 通配
+        assert!(rule("*").match_host("anything:1234"));
+        // 域名不混淆
+        assert!(!rule("example.com").match_host("notexample.com:80"));
     }
 }
