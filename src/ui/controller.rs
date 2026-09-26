@@ -335,7 +335,7 @@ pub fn start_cursor_blink(model: Model, listen_input: Input) {
 }
 
 /// 系统代理设置
-mod sysproxy {
+pub mod sysproxy {
     /// 启动时设置系统 SOCKS5 代理
     pub fn enable(addr: &str) -> anyhow::Result<()> {
         set(addr, true)
@@ -346,12 +346,56 @@ mod sysproxy {
         set("", false)
     }
 
-/// 原代理配置备份（内存即可；进程被杀才会丢，那种极端情况手动关一下系统代理即可）
+    /// 程序启动时调用一次：清掉上次意外退出残留的系统代理
+    /// （能确认指纹是我们写的那套才动手；正常退出由 disable 恢复原配置）
+    pub fn cleanup_leftover() {
+        #[cfg(target_os = "windows")]
+        if let Err(e) = cleanup_leftover_win() {
+            tracing::warn!("清理残留系统代理失败: {e}");
+        }
+        // macOS/Linux 无独立指纹可判（用户可能真的在用回环 socks 代理），
+        // 依赖 set() 启用时对即将写入地址的精确比对，不在启动时盲清
+    }
+
+    #[cfg(target_os = "windows")]
+    fn cleanup_leftover_win() -> anyhow::Result<()> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let run = |args: &[&str]| {
+            std::process::Command::new("reg")
+                .args(args)
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+        };
+        let mut content = String::new();
+        for name in ["ProxyEnable", "ProxyServer", "ProxyOverride"] {
+            let out = run(&["query", KEY, "/v", name])?;
+            if out.status.success() {
+                if let Some(v) = read_value(&out, name) {
+                    content.push_str(&format!("{name}={v}\n"));
+                    continue;
+                }
+            }
+            content.push_str(&format!("{name}=\n"));
+        }
+        if is_self_leftover(&content) {
+            tracing::info!("检测到上次退出残留的系统代理，直接清除");
+            // BACKUP 为空 → set 走“关闭代理”分支并通知系统刷新
+            set("", false)?;
+        }
+        Ok(())
+    }
+
+/// 原代理配置备份（进程被杀才会丢；残留场景由 is_self_leftover 兜底识别，见 set）
 /// 内容格式各平台自定义（key=value 行）
 static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[cfg(target_os = "windows")]
     const KEY: &str = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
+    /// 我们写入的代理豁免串，也是识别自残留的指纹之一
+    #[cfg(target_os = "windows")]
+    pub(super) const OVERRIDE: &str = "localhost;127.*;<local>";
 
     #[cfg(target_os = "windows")]
     fn set(addr: &str, on: bool) -> anyhow::Result<()> {
@@ -367,11 +411,18 @@ static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
         if on {
             // 备份原代理配置到内存（用户可能本来就有代理，如 Clash）
             backup(&run)?;
+            // 上次意外退出没清掉的残留就是我们自己写的那套：不是“原配置”，
+            // 不备份，停止时直接关闭代理，避免把死代理“还原”回去
+            let stale = BACKUP.lock().unwrap().as_deref().is_some_and(is_self_leftover);
+            if stale {
+                *BACKUP.lock().unwrap() = None;
+                tracing::info!("检测到上次退出残留的系统代理，停止时将直接清除");
+            }
             run(&["add", KEY, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"])?;
             // HTTP 代理（daemon 同时支持 SOCKS5 和 HTTP 代理协议）
             run(&["add", KEY, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &addr, "/f"])?;
             // 只豁免本机回环；内网网段（如 192.168.*）恰恰是调试目标，不能豁免
-            run(&["add", KEY, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "localhost;127.*;<local>", "/f"])?;
+            run(&["add", KEY, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", OVERRIDE, "/f"])?;
         } else if BACKUP.lock().unwrap().is_some() {
             // 恢复备份的原配置
             restore(&run)?;
@@ -444,6 +495,27 @@ static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
         Ok(())
     }
 
+    /// 备份内容是否恰是本程序上次意外退出留下的残留（自己写的那套）
+    /// 指纹：ProxyEnable=1 + ProxyOverride 是我们的豁免串 + ProxyServer 指向本机回环
+    /// （用户真实代理恰好也是回环地址且豁免串完全相同才误判，代价只是停用一次，可重开）
+    #[cfg(target_os = "windows")]
+    pub(super) fn is_self_leftover(content: &str) -> bool {
+        let (mut enable, mut server, mut over) = (String::new(), String::new(), String::new());
+        for line in content.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                match k {
+                    "ProxyEnable" => enable = v.to_string(),
+                    "ProxyServer" => server = v.to_string(),
+                    "ProxyOverride" => over = v.to_string(),
+                    _ => {}
+                }
+            }
+        }
+        enable == "1"
+            && over == OVERRIDE
+            && (server.starts_with("127.0.0.1:") || server.starts_with("localhost:"))
+    }
+
     #[cfg(target_os = "macos")]
     fn set(addr: &str, on: bool) -> anyhow::Result<()> {
         let sh = |args: &[&str]| std::process::Command::new("networksetup").args(args).output();
@@ -452,6 +524,7 @@ static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
             Ok(String::from_utf8_lossy(&out.stdout).to_string())
         };
         if on {
+            let (host, port) = addr.rsplit_once(':').unwrap_or((addr, "1080"));
             // 备份当前 socks 代理状态
             let info = get(&["-getsocksfirewallproxy", "Wi-Fi"])?;
             let mut b = String::new();
@@ -463,9 +536,14 @@ static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
                     }
                 }
             }
-            *BACKUP.lock().unwrap() = Some(b);
+            // 上次意外退出留下的残留（正是本程序写的 server/port）不当原配置，停止时直接 off
+            let server_line = format!("server={host}\n");
+            let port_line = format!("port={port}\n");
+            let stale = b.contains("enabled=Yes\n")
+                && b.contains(server_line.as_str())
+                && b.contains(port_line.as_str());
+            *BACKUP.lock().unwrap() = if stale { None } else { Some(b) };
 
-            let (host, port) = addr.rsplit_once(':').unwrap_or((addr, "1080"));
             sh(&["-setsocksfirewallproxy", "Wi-Fi", host, port])?;
             sh(&["-setsocksfirewallproxystate", "Wi-Fi", "on"])?;
         } else if let Some(b) = BACKUP.lock().unwrap().take() {
@@ -502,16 +580,23 @@ static BACKUP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
                 .unwrap_or_default()
         };
         if on {
+            let (host, port) = addr.rsplit_once(':').unwrap_or((addr, "1080"));
             // 备份当前 GNOME 代理配置
+            let mode = get("org.gnome.system.proxy", "mode");
             let b = format!(
                 "mode={}\nhost={}\nport={}\n",
-                get("org.gnome.system.proxy", "mode"),
+                mode,
                 get("org.gnome.system.proxy.socks", "host"),
                 get("org.gnome.system.proxy.socks", "port"),
             );
-            *BACKUP.lock().unwrap() = Some(b);
+            // 上次意外退出留下的残留（正是本程序写的 host/port）不当原配置，停止时直接 none
+            let host_line = format!("host={host}\n");
+            let port_line = format!("port={port}\n");
+            let stale = mode == "manual"
+                && b.contains(host_line.as_str())
+                && b.contains(port_line.as_str());
+            *BACKUP.lock().unwrap() = if stale { None } else { Some(b) };
 
-            let (host, port) = addr.rsplit_once(':').unwrap_or((addr, "1080"));
             sh(&["set", "org.gnome.system.proxy.socks", "host", host])?;
             sh(&["set", "org.gnome.system.proxy.socks", "port", port])?;
             sh(&["set", "org.gnome.system.proxy", "mode", "manual"])?;
@@ -699,6 +784,23 @@ mod sysproxy_tests {
     use super::sysproxy;
 
     // 会真实修改系统代理，默认不跑：cargo test -- --ignored sysproxy
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn self_leftover_detection() {
+        let leftover = |server: &str| {
+            format!("ProxyEnable=1\nProxyServer={server}\nProxyOverride={}\n", sysproxy::OVERRIDE)
+        };
+        // 上次意外退出留下的：指向我们监听的回环地址 + 我们的豁免串
+        assert!(sysproxy::is_self_leftover(&leftover("127.0.0.1:1080")));
+        assert!(sysproxy::is_self_leftover(&leftover("localhost:1080")));
+        // 用户真实代理：非回环地址
+        assert!(!sysproxy::is_self_leftover(&leftover("192.168.120.177:7890")));
+        // 用户真实代理：回环但豁免串不同（如 Clash）
+        assert!(!sysproxy::is_self_leftover("ProxyEnable=1\nProxyServer=127.0.0.1:7890\nProxyOverride=<local>\n"));
+        // 原本没开代理
+        assert!(!sysproxy::is_self_leftover("ProxyEnable=0\nProxyServer=\nProxyOverride=\n"));
+    }
+
     #[test]
     #[ignore = "真实修改系统代理"]
     fn backup_restore_roundtrip() {

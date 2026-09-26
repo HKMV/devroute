@@ -50,6 +50,9 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "auto".into());
     rust_i18n::set_locale(core::config::resolve_locale(&lang));
 
+    // 上次意外退出可能残留了系统代理（备份的是死代理），启动即识别并清掉
+    ui::controller::sysproxy::cleanup_leftover();
+
     if std::env::args().any(|a| a == "--headless") {
         attach_parent_console();
         libs::logs::init_default()?;
