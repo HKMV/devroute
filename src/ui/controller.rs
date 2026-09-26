@@ -134,6 +134,24 @@ pub fn wire(
         let listen_input = v.listen_input.clone();
         let auto_proxy = v.auto_proxy.clone();
         let mut status = v.status.clone();
+        let mut icon_win = v.win.clone();
+        let mut titlebar_icon = v.icon.clone();
+        // 任务栏图标 + 界面左上角图标随状态切换：运行中 = 换色版，停止 = 原图标
+        let set_icon = |win: &mut fltk::window::Window, frame: &mut fltk::frame::Frame, running: bool| {
+            let data: &[u8] = if running {
+                include_bytes!("../../assets/app-icon-running-64.png")
+            } else {
+                include_bytes!("../../assets/app-icon-64.png")
+            };
+            if let Ok(img) = fltk::image::PngImage::from_data(data) {
+                win.set_icon(Some(img));
+            }
+            if let Ok(mut img) = fltk::image::PngImage::from_data(data) {
+                img.scale(20, 20, true, true);
+                frame.set_image(Some(img));
+                frame.redraw();
+            }
+        };
         v.start_btn.set_callback(move |b| {
             let mut slot = daemon_slot.borrow_mut();
             if let Some((tx, _)) = slot.take() {
@@ -147,6 +165,7 @@ pub fn wire(
                 status.set_label(&t!("status_stopped"));
                 status.set_label_color(view::current_pal().subtext);
                 b.set_label(&t!("start"));
+                set_icon(&mut icon_win, &mut titlebar_icon, false);
             } else {
                 let config = AppConfig {
                     listen_addr: listen_input.value(),
@@ -164,6 +183,7 @@ pub fn wire(
                 status.set_label(&t!("status_running"));
                 status.set_label_color(view::current_pal().ok);
                 b.set_label(&t!("stop"));
+                set_icon(&mut icon_win, &mut titlebar_icon, true);
             }
         });
     }
