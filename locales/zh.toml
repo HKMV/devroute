@@ -25,13 +25,16 @@ lang_switch = "EN"
 
 [log]
 sys_proxy_off = "系统代理已取消"
-sys_proxy_off_fail = "取消系统代理失败: {e}"
-sys_proxy_on = "系统代理已设置: socks={addr}"
-sys_proxy_on_fail = "设置系统代理失败: {e}"
-save_pref_fail = "保存系统代理偏好失败: {e}"
-save_fail = "保存 config.toml 失败: {e}"
+sys_proxy_off_fail = "取消系统代理失败: %{e}"
+sys_proxy_on = "系统代理已设置: socks=%{addr}"
+sys_proxy_on_fail = "设置系统代理失败: %{e}"
+save_pref_fail = "保存系统代理偏好失败: %{e}"
+save_fail = "保存 config.toml 失败: %{e}"
 saved = "配置已保存到 config.toml"
 addr_changed_restart = "监听地址变化，重启代理"
-save_theme_fail = "保存主题失败: {e}"
+save_theme_fail = "保存主题失败: %{e}"
 theme_switched = "主题已切换"
-save_lang_fail = "保存语言设置失败: {e}"
+save_lang_fail = "保存语言设置失败: %{e}"
+
+[banner]
+tip = "路径 %{prefix} 转发到 %{host}（转发路径前缀 %{fprefix}）"

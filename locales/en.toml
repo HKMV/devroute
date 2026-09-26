@@ -25,13 +25,16 @@ lang_switch = "中文"
 
 [log]
 sys_proxy_off = "System proxy disabled"
-sys_proxy_off_fail = "Failed to disable system proxy: {e}"
-sys_proxy_on = "System proxy set: socks={addr}"
-sys_proxy_on_fail = "Failed to set system proxy: {e}"
-save_pref_fail = "Failed to save system proxy preference: {e}"
-save_fail = "Failed to save config.toml: {e}"
+sys_proxy_off_fail = "Failed to disable system proxy: %{e}"
+sys_proxy_on = "System proxy set: socks=%{addr}"
+sys_proxy_on_fail = "Failed to set system proxy: %{e}"
+save_pref_fail = "Failed to save system proxy preference: %{e}"
+save_fail = "Failed to save config.toml: %{e}"
 saved = "Config saved to config.toml"
 addr_changed_restart = "Listen address changed, restarting proxy"
-save_theme_fail = "Failed to save theme: {e}"
+save_theme_fail = "Failed to save theme: %{e}"
 theme_switched = "Theme switched"
-save_lang_fail = "Failed to save language setting: {e}"
+save_lang_fail = "Failed to save language setting: %{e}"
+
+[banner]
+tip = "Path %{prefix} forwarded to %{host} (forward path prefix %{fprefix})"

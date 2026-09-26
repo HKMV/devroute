@@ -2,6 +2,7 @@ use crate::core::route::{RouteEngine, RouteRule};
 use crate::core::stats::Stats;
 use anyhow::{Context, Result, anyhow};
 use httparse::Status;
+use rust_i18n::t;
 use std::sync::Arc;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -342,11 +343,14 @@ pub(crate) async fn handle_http_proxy(
     // 应用路由规则（按 host 匹配，路径前缀重写）
     let rule = route_engine.resolve_target_by_host(&target).await;
     let (connect_addr, new_path) = plan_request(&target, &path, rule.as_ref());
-    if connect_addr != target {
+    let forwarded = connect_addr != target;
+    if forwarded {
         info!("转发命中: {method} http://{target}{path} → {connect_addr}{new_path}");
     } else {
         debug!("HTTP proxy {method} {target}{path} 直连");
     }
+    // 命中规则就在页面顶部注入转发提示条；是否注入由响应体是否 HTML 结构决定（见 respond_with_banner）
+    let banner = rule.as_ref().map(banner_html);
     let path = new_path;
 
     let mut server = TcpStream::connect(&connect_addr)
@@ -366,12 +370,14 @@ pub(crate) async fn handle_http_proxy(
     }
     out.push_str("Connection: close\r\n\r\n");
     server.write_all(out.as_bytes()).await?;
-    drop(rule);
     // 头部之后可能已有 body 字节（如 POST），原样转发
     server.write_all(&buf[head_end..]).await?;
     stats.up(out.len() + buf.len() - head_end);
 
-    tunnel(client, server, &stats).await
+    match banner {
+        Some(b) => respond_with_banner(client, server, &b, &stats).await,
+        None => tunnel(client, server, &stats).await,
+    }
 }
 
 /// 路由决策：返回 (实际连接地址, 重写后的路径)。
@@ -418,6 +424,184 @@ pub(crate) async fn parse_http_header(stream: &TcpStream) -> Option<(String, Str
 
 fn service_unavailable() -> &'static [u8] {
     b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 19\r\nConnection: close\r\n\r\nService Unavailable"
+}
+
+/// 页面顶部中间的半透明提示条：显示命中的转发规则（路径 → 服务地址 + 转发路径前缀）
+fn banner_html(rule: &RouteRule) -> String {
+    let fprefix = if rule.forward.prefix.is_empty() { "/" } else { rule.forward.prefix.as_str() };
+    let text = t!(
+        "banner.tip",
+        prefix = esc(&rule.match_.prefix),
+        host = esc(&rule.forward.host),
+        fprefix = esc(fprefix)
+    );
+    format!(
+        r#"<div style="position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,0.55);color:#fff;padding:6px 14px;border-radius:6px;font:12px/1.5 system-ui,sans-serif;pointer-events:none;white-space:nowrap;">{text}</div>"#
+    )
+}
+
+/// HTML 转义：target/path 来自外部请求，不能裸拼进页面
+fn esc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// 读上游响应；响应体是 HTML 结构才注入提示条，其余原样透传
+/// ponytail: 注入时整个响应体缓冲到内存（请求带 Connection: close，有界）；大响应场景再改流式注入
+async fn respond_with_banner(
+    mut client: TcpStream,
+    mut server: TcpStream,
+    banner: &str,
+    stats: &Stats,
+) -> Result<()> {
+    let mut buf = Vec::with_capacity(4096);
+    let head_end = loop {
+        let mut chunk = [0u8; 4096];
+        let n = server.read(&mut chunk).await?;
+        if n == 0 {
+            return Err(anyhow!("connection closed before response headers"));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = buf.windows(4).position(|w| w == *b"\r\n\r\n") {
+            break pos + 4;
+        }
+        if buf.len() > 64 * 1024 {
+            return Err(anyhow!("http response head too large"));
+        }
+    };
+
+    // ponytail: 只嗅探响应体前 512 字节判断是否 HTML；标记出现在更后（流式分块 HTML）则当作非 HTML 透传
+    let mut eof = false;
+    while buf.len() < head_end + 512 && !eof {
+        let mut chunk = [0u8; 4096];
+        let n = server.read(&mut chunk).await?;
+        if n == 0 {
+            eof = true;
+        } else {
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+    let head = std::str::from_utf8(&buf[..head_end]).ok().map(str::to_owned);
+    // 响应体不是 HTML 结构（含压缩二进制/JSON/空响应体如 HEAD）→ 不改，原样转发
+    if !(looks_like_html(&buf[head_end..]) && head.is_some()) {
+        client.write_all(&buf).await?;
+        stats.down(buf.len());
+        let n = io::copy(&mut server, &mut client).await?;
+        stats.down(n as usize);
+        client.shutdown().await.ok();
+        return Ok(());
+    }
+
+    let head = head.unwrap();
+    if !eof {
+        let mut rest = Vec::new();
+        server.read_to_end(&mut rest).await?;
+        buf.extend(rest);
+    }
+    let body = &buf[head_end..];
+
+    let body = if head.to_ascii_lowercase().contains("transfer-encoding:") {
+        dechunk(body)
+    } else {
+        body.to_vec()
+    };
+    let body = inject_into_html(body, banner);
+    let out = rebuild_head(&head, body.len())
+        .into_bytes()
+        .into_iter()
+        .chain(body)
+        .collect::<Vec<u8>>();
+    client.write_all(&out).await?;
+    stats.down(out.len());
+    client.shutdown().await.ok();
+    Ok(())
+}
+
+/// 响应体前 512 字节是否像 HTML 结构：不看请求方法、不看 Content-Type，按实际内容判断
+fn looks_like_html(body: &[u8]) -> bool {
+    let head: Vec<u8> = body[..body.len().min(512)].to_ascii_lowercase();
+    for marker in [b"<html".as_slice(), b"<!doctype", b"<head", b"<body"] {
+        if head.windows(marker.len()).any(|w| w == marker) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 解开 chunked 编码；解析中断时返回已解部分（请求带 Connection: close，正常以 0 块结束）
+fn dechunk(mut data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    loop {
+        let Some(line_end) = data.windows(2).position(|w| w == *b"\r\n") else { break };
+        let size = std::str::from_utf8(&data[..line_end])
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let Ok(size) = usize::from_str_radix(size, 16) else { break };
+        data = &data[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        if data.len() < size {
+            out.extend_from_slice(data);
+            break;
+        }
+        out.extend_from_slice(&data[..size]);
+        data = &data[size..];
+        if data.starts_with(b"\r\n") {
+            data = &data[2..];
+        }
+    }
+    out
+}
+
+/// 重建响应头：去掉长度/编码相关头，改用新的 Content-Length
+fn rebuild_head(head: &str, body_len: usize) -> String {
+    let mut out = String::new();
+    for line in head.split("\r\n") {
+        let l = line.to_ascii_lowercase();
+        if l.starts_with("content-length:")
+            || l.starts_with("transfer-encoding:")
+            || l.starts_with("connection:")
+            || line.is_empty()
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
+    out.push_str(&format!("Content-Length: {body_len}\r\nConnection: close\r\n\r\n"));
+    out
+}
+
+/// 把提示条插进 HTML：优先 </body> 前，其次 <body ...> 后，都没有则前置
+fn inject_into_html(mut body: Vec<u8>, banner: &str) -> Vec<u8> {
+    let b = banner.as_bytes();
+    if let Some(p) = body.windows(7).rposition(|w| w.eq_ignore_ascii_case(b"</body>")) {
+        body.splice(p..p, b.iter().copied());
+        return body;
+    }
+    if let Some(p) = body.windows(5).position(|w| w.eq_ignore_ascii_case(b"<body"))
+        && let Some(off) = body[p..].iter().position(|&c| c == b'>')
+    {
+        let at = p + off + 1;
+        body.splice(at..at, b.iter().copied());
+        return body;
+    }
+    let mut out = b.to_vec();
+    out.extend_from_slice(&body);
+    out
 }
 
 #[cfg(test)]
@@ -471,5 +655,41 @@ mod tests {
     fn unmatched_prefix_passthrough() {
         let data = b"GET /other HTTP/1.1\r\nHost: example.com\r\n\r\n";
         assert!(modify_http_data(data, &rule()).is_none());
+    }
+
+    #[test]
+    fn dechunk_decodes() {
+        let data = b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
+        assert_eq!(dechunk(data), b"Wikipedia");
+    }
+
+    #[test]
+    fn inject_into_body_tag() {
+        let body = b"<html><body>hi</body></html>".to_vec();
+        let out = inject_into_html(body, "<b>B</b>");
+        assert_eq!(out, b"<html><body>hi<b>B</b></body></html>".to_vec());
+    }
+
+    #[test]
+    fn inject_without_body() {
+        let out = inject_into_html(b"plain".to_vec(), "<b>B</b>");
+        assert_eq!(out, b"<b>B</b>plain".to_vec());
+    }
+
+    #[test]
+    fn looks_like_html_detects_structure() {
+        assert!(looks_like_html(b"<!DOCTYPE html><html>"));
+        assert!(looks_like_html(b"\r\n  <HTML lang=\"en\">"));
+        assert!(looks_like_html(b"12\r\n<html><body>")); // chunked 首块
+        assert!(!looks_like_html(b"{\"a\":1}"));
+        assert!(!looks_like_html(b"")); // HEAD / 空响应体
+        assert!(!looks_like_html(&[0x1f, 0x8b, 0x08, 0x00])); // gzip 二进制
+    }
+
+    #[test]
+    fn rebuild_head_replaces_length() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let out = rebuild_head(head, 7);
+        assert_eq!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 7\r\nConnection: close\r\n\r\n");
     }
 }
