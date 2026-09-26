@@ -359,10 +359,16 @@ pub(crate) async fn handle_http_proxy(
     server.set_nodelay(true).ok();
 
     // 重建请求头：origin-form + Connection: close（一跳一答，简单可靠）
+    // 命中规则的请求剥掉条件请求头（If-None-Match/If-Modified-Since）：
+    // 否则服务器回 304 无响应体，浏览器继续用无横幅的旧缓存渲染
+    let strip_conditional = banner.is_some();
     let mut out = format!("{method} {path} HTTP/1.1\r\n");
     for h in req.headers.iter() {
         if h.name.eq_ignore_ascii_case("proxy-connection")
             || h.name.eq_ignore_ascii_case("connection")
+            || (strip_conditional
+                && (h.name.eq_ignore_ascii_case("if-none-match")
+                    || h.name.eq_ignore_ascii_case("if-modified-since")))
         {
             continue;
         }
@@ -566,7 +572,8 @@ fn dechunk(mut data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 重建响应头：去掉长度/编码相关头，改用新的 Content-Length
+/// 重建响应头：去掉长度/编码/缓存相关头，改用新的 Content-Length。
+/// 注入过横幅的页面禁用浏览器缓存，否则停止代理后刷新还是带横幅的旧缓存
 fn rebuild_head(head: &str, body_len: usize) -> String {
     let mut out = String::new();
     for line in head.split("\r\n") {
@@ -574,6 +581,9 @@ fn rebuild_head(head: &str, body_len: usize) -> String {
         if l.starts_with("content-length:")
             || l.starts_with("transfer-encoding:")
             || l.starts_with("connection:")
+            || l.starts_with("cache-control:")
+            || l.starts_with("etag:")
+            || l.starts_with("last-modified:")
             || line.is_empty()
         {
             continue;
@@ -581,7 +591,9 @@ fn rebuild_head(head: &str, body_len: usize) -> String {
         out.push_str(line);
         out.push_str("\r\n");
     }
-    out.push_str(&format!("Content-Length: {body_len}\r\nConnection: close\r\n\r\n"));
+    out.push_str(&format!(
+        "Content-Length: {body_len}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n"
+    ));
     out
 }
 
@@ -687,9 +699,12 @@ mod tests {
     }
 
     #[test]
-    fn rebuild_head_replaces_length() {
-        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n";
+    fn rebuild_head_replaces_length_and_disables_cache() {
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\nCache-Control: max-age=3600\r\nETag: \"v1\"\r\n\r\n";
         let out = rebuild_head(head, 7);
-        assert_eq!(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 7\r\nConnection: close\r\n\r\n");
+        assert_eq!(
+            out,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 7\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n"
+        );
     }
 }
