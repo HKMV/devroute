@@ -16,6 +16,9 @@
 
 - **Dual-protocol proxy**: a single listening port auto-detects SOCKS5 and HTTP proxy traffic (CONNECT + absolute-form requests)
 - **Rule-based forwarding**: match by `Host:Port` + request path prefix, forward to the target and rewrite the path prefix
+- **On-page forwarding banner**: pages matching a rule get a translucent banner at top-center (matched path → forward target + prefix), making it obvious what's being forwarded; injected responses are marked `no-store` so the banner disappears once the proxy stops (pages cached before enabling need one hard refresh, Ctrl+F5)
+- **Crash leftover cleanup**: system proxy settings left behind by an unexpected exit are detected and cleared on next launch — a dead proxy is never "restored"
+- **Running-state icon**: taskbar and in-app icon change color with proxy start/stop (Windows / Linux X11; on macOS the Dock shows the app icon, but the in-app icon still reflects state)
 - **GUI desktop app** (default): rule CRUD, save with hot reload, connection/traffic stats, live logs, one-click system proxy, light/dark theme, Chinese/English UI
 - **Lightweight**: ~3.5MB idle with GUI (~4MB while proxying, grows with traffic); `--headless` mode starts at ~1.6MB, ideal for leaving running
 - Auto-generates a default `config.toml`; config changes take effect immediately
@@ -124,7 +127,7 @@ src/
   daemon.rs          # Proxy worker (tokio runtime + command channel + hot reload)
   core/
     socks.rs         # SOCKS5 handling + protocol sniffing (first byte 0x05)
-    http.rs          # HTTP path rewriting + HTTP proxy (CONNECT / absolute-form)
+    http.rs          # HTTP path rewriting + HTTP proxy (CONNECT / absolute-form) + on-page banner injection
     route.rs         # Route rule matching (hot-updated via RwLock)
     config.rs        # Config load/save (inline-table TOML)
     stats.rs         # Atomic connection/traffic counters
