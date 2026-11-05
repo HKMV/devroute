@@ -544,7 +544,7 @@ fn looks_like_html(body: &[u8]) -> bool {
 }
 
 /// 解开 chunked 编码；解析中断时返回已解部分（请求带 Connection: close，正常以 0 块结束）
-fn dechunk(mut data: &[u8]) -> Vec<u8> {
+pub(crate) fn dechunk(mut data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     loop {
         let Some(line_end) = data.windows(2).position(|w| w == *b"\r\n") else { break };

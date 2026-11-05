@@ -125,6 +125,13 @@ fn init_tracing(logs_dir: String, log_file: String, level: LevelFilter, ui_sink:
         )
     };
     let ui_layer = ui_sink.map(|sink| UiLayer { sink });
+    // 三方库降噪：https 上游会让 rustls 每个请求刷一串 DEBUG 握手日志，把界面日志淹掉
+    let quiet = tracing_subscriber::filter::Targets::new()
+        .with_default(LevelFilter::from_level(tracing_level))
+        .with_target("rustls", Level::WARN)
+        .with_target("tokio_rustls", Level::WARN)
+        .with_target("hyper", Level::WARN)
+        .with_target("h2", Level::WARN);
 
     if cfg!(debug_assertions) {
         let fmt_layer = tracing_subscriber::fmt::layer()
@@ -144,6 +151,7 @@ fn init_tracing(logs_dir: String, log_file: String, level: LevelFilter, ui_sink:
             )
             .with_filter(LevelFilter::from_level(tracing_level));
         tracing_subscriber::registry()
+            .with(quiet)
             .with(fmt_layer)
             .with(ui_layer)
             .init();
@@ -169,6 +177,7 @@ fn init_tracing(logs_dir: String, log_file: String, level: LevelFilter, ui_sink:
             )
             .with_filter(LevelFilter::from_level(tracing_level));
         tracing_subscriber::registry()
+            .with(quiet)
             .with(fmt_layer)
             .with(ui_layer)
             .init();

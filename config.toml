@@ -1,12 +1,25 @@
-listen_addr = "127.0.0.1:1080"
+proxy_listen = "127.0.0.1:1080"
+proxy_enable = true
 theme = "system"
 language = "zh"
 auto_proxy = true
 
-[[rules]]
+[[sites]]
+enable = false
+name = "调试站"
+listen_addr = "127.0.0.1:8088"
+upstream = "http://192.168.120.177:81"
+insecure = false
+
+[[sites.rules]]
+path_prefix = "/api"
+forward_addr = "127.0.0.1:8686"
+forward_prefix = ""
+
+[[proxy_rules]]
 matcher = { addr = "192.168.120.177:81", path_prefix = "/api" }
 forward = { addr = "127.0.0.1:8686", path_prefix = "" }
 
-[[rules]]
+[[proxy_rules]]
 matcher = { addr = "192.168.120.181:81", path_prefix = "/api" }
 forward = { addr = "127.0.0.1:8801", path_prefix = "" }

@@ -1,6 +1,6 @@
 [package]
 name = "devroute"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 
 [dependencies]
@@ -15,8 +15,12 @@ tracing-appender = "0.2"
 
 time = { version = "0.3", features = ["parsing", "macros"] }
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "signal", "time"] }
 httparse = "1.10"
+# 镜像站点的 https 上游（ring provider：不依赖 cmake/nasm，与 fltk 的 C 工具链共用）
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
 dark-light = "3.0.0"
 fltk = { version = "1.5.23", features = ["fltk-bundled"] }
 fltk-theme = "0.7.9"

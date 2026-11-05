@@ -106,6 +106,15 @@ impl RouteEngine {
         None
     }
 
+    /// 镜像站点内嵌规则：站点已经绑定上游，只按路径前缀匹配（空前缀 = 兜底全部转本地）
+    pub(crate) async fn resolve_by_path(&self, path: &str) -> Option<RouteRule> {
+        let rules = self.rules.read().await;
+        rules
+            .iter()
+            .find(|rule| path.starts_with(&rule.match_.prefix))
+            .cloned()
+    }
+
     // 动态更新规则
     pub(crate) async fn update_rules(&self, new_rules: Vec<RouteRule>) {
         let mut rules = self.rules.write().await;
@@ -136,5 +145,25 @@ mod tests {
         assert!(rule("*").match_host("anything:1234"));
         // 域名不混淆
         assert!(!rule("example.com").match_host("notexample.com:80"));
+    }
+
+    #[tokio::test]
+    async fn site_rules_match_by_path_only() {
+        let engine = RouteEngine {
+            rules: Arc::new(RwLock::new(vec![
+                RouteRule::new("*", "/api", "127.0.0.1:8686", ""),
+                RouteRule::new("*", "/upload", "127.0.0.1:8686", "/v1"),
+            ])),
+        };
+        assert_eq!(engine.resolve_by_path("/api/test").await.unwrap().forward.host, "127.0.0.1:8686");
+        // 先命中前缀更短的无关规则不会误伤：/api 不匹配 /upload
+        assert!(engine.resolve_by_path("/static/app.js").await.is_none());
+        assert_eq!(engine.resolve_by_path("/upload/x").await.unwrap().forward.prefix, "/v1");
+
+        // 空前缀 = 兜底全部转本地
+        let all = RouteEngine {
+            rules: Arc::new(RwLock::new(vec![RouteRule::new("*", "", "127.0.0.1:9000", "")])),
+        };
+        assert!(all.resolve_by_path("/anything/at/all").await.is_some());
     }
 }

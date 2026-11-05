@@ -2,3 +2,5 @@
 .idea
 *.iml
 *.log
+.openbitfun/
+/.openbitfun/search/flashgrep-index/

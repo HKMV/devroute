@@ -58,13 +58,18 @@ fn main() -> anyhow::Result<()> {
         libs::logs::init_default()?;
         let config = core::config::AppConfig::init()?;
         let stats = core::stats::Stats::shared();
+        // 两种模式独立：proxy_enable 决定起不起代理，站点各自 enable 决定起不起
+        let _proxy = config
+            .proxy_enable
+            .then(|| daemon::spawn_proxy(config.clone(), stats.clone()));
+        let _sites = config
+            .sites
+            .iter()
+            .any(|s| s.enable)
+            .then(|| daemon::spawn_sites(config.sites.clone(), stats.clone()));
         tokio::runtime::Runtime::new()?.block_on(async move {
-            let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            tokio::select! {
-                r = daemon::run(config, rx, stats) => r?,
-                _ = tokio::signal::ctrl_c() => {}
-            }
-            Ok(())
+            tokio::signal::ctrl_c().await?;
+            Ok::<(), anyhow::Error>(())
         })
     } else {
         ui::run()

@@ -15,24 +15,56 @@ public class Win {
 }
 "@
 [Win]::SetProcessDPIAware() | Out-Null
+New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-function Shot([string]$theme, [string]$lang, [string]$outFile) {
+function Shot([string]$theme, [string]$lang, [int]$tab, [string]$outFile) {
   $work = Join-Path $env:TEMP ("devroute_shot_" + [guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force $work | Out-Null
   Set-Content -Encoding ascii (Join-Path $work "config.toml") @"
-listen_addr = "127.0.0.1:1080"
+proxy_listen = "127.0.0.1:1080"
+proxy_enable = true
 theme = "$theme"
 language = "$lang"
 auto_proxy = false
 
-[[rules]]
+[[sites]]
+enable = true
+name = "192.168.120.177"
+listen_addr = "127.0.0.1:8088"
+upstream = "http://192.168.120.177:81"
+insecure = false
+
+[[sites.rules]]
+path_prefix = "/api"
+forward_addr = "127.0.0.1:8686"
+forward_prefix = ""
+
+[[sites.rules]]
+path_prefix = "/upload"
+forward_addr = "127.0.0.1:8686"
+forward_prefix = "/v1"
+
+[[sites]]
+enable = false
+name = "192.168.120.181"
+listen_addr = "127.0.0.1:8089"
+upstream = "https://192.168.120.181:81"
+insecure = true
+
+[[sites.rules]]
+path_prefix = "/api"
+forward_addr = "127.0.0.1:8886"
+forward_prefix = ""
+
+[[proxy_rules]]
 matcher = { addr = "192.168.120.177:81", path_prefix = "/api" }
 forward = { addr = "127.0.0.1:8686", path_prefix = "" }
 
-[[rules]]
+[[proxy_rules]]
 matcher = { addr = "192.168.120.181:81", path_prefix = "/api" }
 forward = { addr = "127.0.0.1:8886", path_prefix = "" }
 "@
+  $env:DEVROUTE_UI_TAB = "$tab"
   $p = Start-Process -FilePath $Exe -WorkingDirectory $work -PassThru
   $h = [IntPtr]::Zero
   for ($i = 0; $i -lt 50; $i++) {
@@ -59,7 +91,12 @@ forward = { addr = "127.0.0.1:8886", path_prefix = "" }
   Start-Sleep -Milliseconds 600
 }
 
-Shot "light" "zh" (Join-Path $OutDir "screenshot-light.png")
-Shot "dark"  "zh" (Join-Path $OutDir "screenshot-dark.png")
-Shot "light" "en" (Join-Path $OutDir "screenshot-light-en.png")
-Shot "dark"  "en" (Join-Path $OutDir "screenshot-dark-en.png")
+# 0 = 镜像站点页（默认页） 1 = 代理模式页
+Shot "light" "zh" 0 (Join-Path $OutDir "screenshot-sites-light.png")
+Shot "dark"  "zh" 0 (Join-Path $OutDir "screenshot-sites-dark.png")
+Shot "light" "en" 0 (Join-Path $OutDir "screenshot-sites-light-en.png")
+Shot "dark"  "en" 0 (Join-Path $OutDir "screenshot-sites-dark-en.png")
+Shot "light" "zh" 1 (Join-Path $OutDir "screenshot-light.png")
+Shot "dark"  "zh" 1 (Join-Path $OutDir "screenshot-dark.png")
+Shot "light" "en" 1 (Join-Path $OutDir "screenshot-light-en.png")
+Shot "dark"  "en" 1 (Join-Path $OutDir "screenshot-dark-en.png")
