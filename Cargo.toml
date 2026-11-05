@@ -1,7 +1,8 @@
 [package]
 name = "devroute"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
+repository = "https://github.com/HKMV/devroute"
 
 [dependencies]
 anyhow = "1.0"

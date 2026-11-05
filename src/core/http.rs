@@ -598,7 +598,7 @@ fn rebuild_head(head: &str, body_len: usize) -> String {
 }
 
 /// 把提示条插进 HTML：优先 </body> 前，其次 <body ...> 后，都没有则前置
-fn inject_into_html(mut body: Vec<u8>, banner: &str) -> Vec<u8> {
+pub(crate) fn inject_into_html(mut body: Vec<u8>, banner: &str) -> Vec<u8> {
     let b = banner.as_bytes();
     if let Some(p) = body.windows(7).rposition(|w| w.eq_ignore_ascii_case(b"</body>")) {
         body.splice(p..p, b.iter().copied());

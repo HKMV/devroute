@@ -57,3 +57,4 @@ no_site_selected = "No site selected — add a site first"
 
 [banner]
 tip = "Path %{prefix} forwarded to %{host} (forward path prefix %{fprefix})"
+footer = "Powered by devroute"

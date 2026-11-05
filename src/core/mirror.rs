@@ -12,6 +12,7 @@ use crate::core::route::RouteEngine;
 use crate::core::stats::Stats;
 use anyhow::{Context, Result, anyhow};
 use httparse::Status;
+use rust_i18n::t;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
@@ -336,7 +337,8 @@ pub(crate) async fn handle(
             body
         };
         let body = if body.len() <= MAX_REWRITE {
-            rewrite_body(body, &resp.content_type(), &ctx)
+            // 只给顶层文档挂署名条：iframe / embed 里那份会挤在小框里挡内容
+            rewrite_body(body, &resp.content_type(), &ctx, is_top_level(&req))
         } else {
             body
         };
@@ -494,14 +496,47 @@ fn is_textual(content_type: &str) -> bool {
 }
 
 /// 把响应体里写死的上游 origin 换成本地 origin
-fn rewrite_body(body: Vec<u8>, content_type: &str, ctx: &SiteCtx) -> Vec<u8> {
+fn rewrite_body(body: Vec<u8>, content_type: &str, ctx: &SiteCtx, badge: bool) -> Vec<u8> {
     let body = replace_origin(&body, ctx);
-    // 改写了脚本内容，SRI 哈希必然对不上，浏览器会拒绝执行 → 剥掉 integrity 属性
     if content_type.contains("html") {
-        strip_integrity(body)
+        // 改写了脚本内容，SRI 哈希必然对不上，浏览器会拒绝执行 → 剥掉 integrity 属性
+        // 再在页面底部注入署名条：从本地端口看上游页面时，一眼能看出这页是 devroute 镜像的
+        let body = strip_integrity(body);
+        if badge { inject_footer(body) } else { body }
     } else {
         body
     }
+}
+
+/// 顶层文档才挂署名条。浏览器带 `Sec-Fetch-Dest`，iframe/embed 里的那份注入会挤在小框里
+/// 挡住上游内容；老客户端不发这个头时按顶层处理
+fn is_top_level(req: &Request) -> bool {
+    req.header("sec-fetch-dest").is_none_or(|d| {
+        !matches!(
+            d.trim().to_ascii_lowercase().as_str(),
+            "iframe" | "frame" | "embed" | "object"
+        )
+    })
+}
+
+/// 页面底部居中的署名条：纯内联样式，不依赖任何外部资源，也不会挡住页面点击
+fn footer_html() -> String {
+    let text = t!("banner.footer");
+    format!(
+        r#"<div id="devroute-footer" style="position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:2147483647;background:rgba(0,0,0,0.55);color:#fff;padding:5px 12px;border-radius:6px;font:12px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;pointer-events:none;white-space:nowrap;">{text}</div>"#
+    )
+}
+
+/// 只往完整文档里注入：AJAX 拿到的 HTML 片段（没有 html/body 结构）插进去会破坏页面布局
+fn inject_footer(body: Vec<u8>) -> Vec<u8> {
+    let head = &body[..body.len().min(2048)];
+    let is_document = [b"<html".as_slice(), b"<body"]
+        .iter()
+        .any(|marker| head.windows(marker.len()).any(|w| w.eq_ignore_ascii_case(marker)));
+    if !is_document {
+        return body;
+    }
+    crate::core::http::inject_into_html(body, &footer_html())
 }
 
 fn replace_origin(body: &[u8], ctx: &SiteCtx) -> Vec<u8> {
@@ -844,7 +879,7 @@ mod tests {
     fn rewrites_absolute_urls_in_body() {
         let c = ctx();
         let js = br#"var base="http://192.168.120.177:81/api";var w="ws://192.168.120.177:81/ws";"#;
-        let out = String::from_utf8(rewrite_body(js.to_vec(), "application/javascript", &c)).unwrap();
+        let out = String::from_utf8(rewrite_body(js.to_vec(), "application/javascript", &c, true)).unwrap();
         assert!(out.contains("http://127.0.0.1:8088/api"));
         assert!(out.contains("ws://127.0.0.1:8088/ws"));
         assert!(!out.contains("192.168.120.177"));
@@ -854,7 +889,7 @@ mod tests {
     fn rewrites_protocol_relative_and_https_forms() {
         let c = ctx();
         let html = br#"<a href="//192.168.120.177:81/x">a</a><b>https://192.168.120.177:81/y</b>"#;
-        let out = String::from_utf8(rewrite_body(html.to_vec(), "text/html", &c)).unwrap();
+        let out = String::from_utf8(rewrite_body(html.to_vec(), "text/html", &c, true)).unwrap();
         assert!(out.contains("//127.0.0.1:8088/x"));
         // 上游写 https 但本地是 http，协议也要跟着降
         assert!(out.contains("http://127.0.0.1:8088/y"));
@@ -865,7 +900,7 @@ mod tests {
     fn rewrites_https_upstream_urls() {
         let c = SiteCtx::new(&site("https://a.com")).unwrap();
         let js = br#"fetch("https://a.com:443/api")"#;
-        let out = String::from_utf8(rewrite_body(js.to_vec(), "application/javascript", &c)).unwrap();
+        let out = String::from_utf8(rewrite_body(js.to_vec(), "application/javascript", &c, true)).unwrap();
         assert_eq!(out, r#"fetch("http://127.0.0.1:8088/api")"#);
     }
 
@@ -873,7 +908,7 @@ mod tests {
     fn strips_integrity_after_rewrite() {
         let c = ctx();
         let html = br#"<script src="/a.js" integrity="sha384-abc" crossorigin></script>"#;
-        let out = String::from_utf8(rewrite_body(html.to_vec(), "text/html", &c)).unwrap();
+        let out = String::from_utf8(rewrite_body(html.to_vec(), "text/html", &c, true)).unwrap();
         assert!(!out.contains("integrity"));
         assert!(out.contains(r#"src="/a.js" crossorigin>"#));
     }
@@ -1017,6 +1052,68 @@ mod tests {
         // 普通请求则剥掉，统一走 Connection: close 一跳一答
         let head = build_upstream_head(&req, "/upload", true, false, &c);
         assert!(!head.to_ascii_lowercase().contains("transfer-encoding"));
+    }
+
+    #[test]
+    fn injects_footer_into_mirrored_page() {
+        let c = ctx();
+        let html = br#"<html><body><h1>hi</h1></body></html>"#;
+        let out = String::from_utf8(rewrite_body(html.to_vec(), "text/html; charset=utf-8", &c, true)).unwrap();
+        // 注入在 </body> 之前，且只出现一次
+        assert_eq!(out.matches("id=\"devroute-footer\"").count(), 1);
+        assert!(out.contains("id=\"devroute-footer\""));
+        assert!(out.find("devroute-footer").unwrap() < out.find("</body>").unwrap());
+        // 中英文案都带品牌名，界面语言切换后仍能识别
+        assert!(out.contains("devroute"));
+    }
+
+    #[test]
+    fn footer_skipped_for_html_fragment() {
+        // AJAX 拿到的 HTML 片段没有文档结构，插进去会破坏布局
+        let c = ctx();
+        let out = rewrite_body(b"<div>row</div>".to_vec(), "text/html", &c, true);
+        assert_eq!(out, b"<div>row</div>".to_vec());
+        // 非 HTML 的文本资源不注入（JS / JSON 里插 div 会直接语法错误）
+        let js = rewrite_body(b"var a=1;".to_vec(), "application/javascript", &c, true);
+        assert_eq!(js, b"var a=1;".to_vec());
+    }
+
+    #[test]
+    fn footer_follows_ui_language() {
+        // 署名条文案跟界面语言走：英文界面注入英文，中文界面注入中文
+        rust_i18n::set_locale("en");
+        assert!(footer_html().contains("Powered by devroute"));
+        rust_i18n::set_locale("zh");
+        assert!(footer_html().contains("由 devroute 提供支持"));
+    }
+
+    #[test]
+    fn iframe_documents_skip_badge() {
+        let c = ctx();
+        let html = || b"<html><body>x</body></html>".to_vec();
+        // badge=false：只改写 origin / 剥 integrity，不挂署名条
+        let out = String::from_utf8(rewrite_body(html(), "text/html", &c, false)).unwrap();
+        assert!(!out.contains("devroute-footer"));
+        // 浏览器发 Sec-Fetch-Dest: iframe 的请求不算顶层文档
+        let req = |dest: Option<&str>| Request {
+            method: "GET".into(),
+            path: "/".into(),
+            headers: dest
+                .map(|d| vec![("Sec-Fetch-Dest".to_string(), d.to_string())])
+                .unwrap_or_default(),
+        };
+        assert!(!is_top_level(&req(Some("iframe"))));
+        assert!(!is_top_level(&req(Some("embed"))));
+        assert!(is_top_level(&req(Some("document"))));
+        // 老客户端不带这个头，按顶层处理
+        assert!(is_top_level(&req(None)));
+    }
+
+    #[test]
+    fn footer_html_uses_escape_safe_inline_markup() {
+        let f = footer_html();
+        assert!(f.starts_with("<div id=\"devroute-footer\""));
+        assert!(!f.contains("<script")); // 不改动页面脚本环境
     }
 
     #[test]

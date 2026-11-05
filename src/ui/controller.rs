@@ -7,7 +7,7 @@ use crate::ui::view::{self, View};
 use rust_i18n::t;
 use rust_i18n::set_locale;
 use fltk::enums::CallbackTrigger;
-use fltk::{app, frame::Frame, group::Pack, input::Input, prelude::*};
+use fltk::{app, frame::Frame, group::Pack, group::Scroll, input::Input, prelude::*};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -161,15 +161,12 @@ pub fn add_rule(pack: &Pack, model: &Model, rule: Rule) {
                 m.iter().position(|e| e.id == id).map(|pos| m.remove(pos))
             };
             let Some(entry) = entry else { return };
-            app::delete_widget(entry.widget);
-            // 剩余行上移
-            {
-                let m = m.borrow();
-                for (idx, e) in m.iter().enumerate() {
-                    let mut w = e.widget.clone();
-                    w.set_pos(0, idx as i32 * (view::ROW_H + view::ROW_GAP));
-                }
-            }
+            // delete_widget 是延迟删除：先藏起来，否则本轮绘制还会把它算进 Pack 的排版
+            let mut doomed = entry.widget;
+            doomed.hide();
+            app::delete_widget(doomed);
+            // 剩余行的位置交给 Pack 下一轮 draw 重排：这里手动 set_pos 会把行摆到滚动视图外面，
+            // 删完滚动列表就剩一大片空白，得靠再滚一下才复位
             resize_pack(&pack, &m);
         });
     }
@@ -199,12 +196,35 @@ fn model_set(model: &Model, id: u64, field: usize, val: &str) {
     }
 }
 
+/// pack 的父容器就是它所在的滚动区（行 Pack 都直接建在 Scroll 里，见 view::build）
+fn parent_scroll(pack: &Pack) -> Option<Scroll> {
+    let parent = pack.parent()?;
+    // SAFETY: 三个行列表的 Pack 父级都是 Fl_Scroll，指针类型由 view::build 保证
+    Some(unsafe { Scroll::from_widget_ptr(parent.as_widget_ptr()) })
+}
+
+/// 行变少后把滚动位置收回到有效范围：Fl_Scroll 不会自己把子控件挪回来，
+/// 停在旧的偏移上就只剩一大片空白（用户得再滚一下才复位）
+fn clamp_scroll(pack: &Pack, content_h: i32) {
+    let Some(mut sc) = parent_scroll(pack) else { return };
+    let max = (content_h - sc.h()).max(0);
+    let y = sc.yposition();
+    if y > max {
+        sc.scroll_to(sc.xposition(), max);
+    }
+}
+
+/// 行列表的实际内容高度：n 行 + 行间空隙（Pack 自己也是这么算的）
+fn content_h(n: i32, row_h: i32, gap: i32) -> i32 {
+    if n <= 0 { 0 } else { n * (row_h + gap) - gap }
+}
+
 pub fn resize_pack(pack: &Pack, model: &Model) {
+    let n = model.borrow().len() as i32;
     let mut pack = pack.clone();
-    pack.set_size(
-        view::ROW_W,
-        model.borrow().len() as i32 * (view::ROW_H + view::ROW_GAP),
-    );
+    pack.set_size(view::ROW_W, n * (view::ROW_H + view::ROW_GAP));
+    // 行变少后滚动位置要收回到有效范围，否则视口里只剩一大片空白
+    clamp_scroll(&pack, content_h(n, view::ROW_H, view::ROW_GAP));
     // pack 缩小后，被删行残留像素在 pack 新边界外，需要全量重绘
     app::redraw();
 }
@@ -285,13 +305,12 @@ pub fn add_site(
                     return;
                 };
                 let entry = m.remove(pos);
-                for (idx, e) in m.iter().enumerate() {
-                    let mut w = e.widget.clone();
-                    w.set_pos(0, idx as i32 * (view::SITE_ROW_H + view::SITE_ROW_GAP));
-                }
                 (entry.widget, pos)
             };
-            app::delete_widget(removed);
+            // 延迟删除期间先藏起来，避免这一轮绘制仍按旧行数排版（重排交给 Pack 的 draw）
+            let mut doomed = removed;
+            doomed.hide();
+            app::delete_widget(doomed);
             resize_site_pack(&pack, &m);
             // 删掉的正是正在编辑的站点时，顺位选同位置那条（没了就选末尾，全删光则清空规则区）
             let next = if selected_site() == id {
@@ -362,11 +381,10 @@ fn site_set(model: &SiteModel, id: u64, field: usize, val: &str) {
 }
 
 pub fn resize_site_pack(pack: &Pack, model: &SiteModel) {
+    let n = model.borrow().len() as i32;
     let mut pack = pack.clone();
-    pack.set_size(
-        view::SITE_ROW_W,
-        model.borrow().len() as i32 * (view::SITE_ROW_H + view::SITE_ROW_GAP),
-    );
+    pack.set_size(view::SITE_ROW_W, n * (view::SITE_ROW_H + view::SITE_ROW_GAP));
+    clamp_scroll(&pack, content_h(n, view::SITE_ROW_H, view::SITE_ROW_GAP));
     app::redraw();
 }
 
@@ -475,13 +493,14 @@ fn push_site_rule_row(
                 m.iter().position(|e| e.id == id).map(|i| m.remove(i))
             };
             let Some(entry) = entry else { return };
-            app::delete_widget(entry.widget);
-            // 剩余行上移，同时各自修正下标（被删那条之后的规则都前移一位）
+            // 延迟删除期间先藏起来，这一轮绘制才不会按旧行数排版
+            let mut doomed = entry.widget;
+            doomed.hide();
+            app::delete_widget(doomed);
+            // 位置交给 Pack 重排；这里只修「被删那条之后的规则都前移一位」的下标
             {
                 let m = m.borrow();
-                for (i, e) in m.iter().enumerate() {
-                    let mut w = e.widget.clone();
-                    w.set_pos(0, i as i32 * (view::SITE_RULE_ROW_H + view::SITE_RULE_ROW_GAP));
+                for e in m.iter() {
                     let cur = e.pos.get();
                     if cur > p {
                         e.pos.set(cur - 1);
@@ -503,11 +522,13 @@ fn push_site_rule_row(
 }
 
 pub fn resize_site_rule_pack(pack: &Pack, model: &SiteRuleModel) {
+    let n = model.borrow().len() as i32;
     let mut pack = pack.clone();
     pack.set_size(
         view::SITE_RULE_ROW_W,
-        model.borrow().len() as i32 * (view::SITE_RULE_ROW_H + view::SITE_RULE_ROW_GAP),
+        n * (view::SITE_RULE_ROW_H + view::SITE_RULE_ROW_GAP),
     );
+    clamp_scroll(&pack, content_h(n, view::SITE_RULE_ROW_H, view::SITE_RULE_ROW_GAP));
     app::redraw();
 }
 
@@ -918,6 +939,9 @@ pub fn wire(
             app::quit();
         });
     }
+
+    // GitHub 按钮：用系统默认浏览器打开仓库主页
+    v.gh_btn.clone().set_callback(|_| open_url(env!("CARGO_PKG_REPOSITORY")));
 
     // 主题分段控件：立即切换 + 持久化
     for idx in 0..v.theme_btns.len() {
@@ -1350,12 +1374,14 @@ pub fn apply_theme(
         pal.subtext
     });
     // 标题栏按钮恢复常态色（hover 配色事件里现读 current_pal，不用管）
-    for b in [&v.min_btn, &v.close_btn] {
+    for b in [&v.min_btn, &v.close_btn, &v.gh_btn] {
         let mut b = b.clone();
         b.set_color(pal.bg);
         b.set_label_color(pal.subtext);
         b.redraw();
     }
+    // GitHub 图标是位图化的，换主题要按新配色重新生成
+    view::set_github_icon(&mut v.gh_btn.clone(), pal);
     // 页签 + 主题分段控件
     view::refresh_tab_btns(&mut v.tab_btns.clone(), current_tab(), pal);
     v.tab_bar.clone().set_color(pal.seg_bg);

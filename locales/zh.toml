@@ -57,3 +57,4 @@ no_site_selected = "没有选中的站点，先添加一个站点"
 
 [banner]
 tip = "路径 %{prefix} 转发到 %{host}（转发路径前缀 %{fprefix}）"
+footer = "由 devroute 提供支持"
