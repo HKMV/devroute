@@ -4,11 +4,11 @@
 
 [English](README_EN.md) | 中文
 
-> A local forwarding tool for development & debugging: **extremely lightweight, ~3.4MB RAM idle with GUI (2.5MB headless)**, a single ~4MB binary you can copy anywhere. Two **independent, separately startable** ways to use it: a **SOCKS5/HTTP proxy** (forward by `Host + path prefix` with path rewriting) and **mirror sites** (serve the remote frontend from a local port and route API calls to your local service — no system proxy involved). Ships with a GUI (two tabs — mirror sites and proxy, mirror sites first and selected by default — each with its own rules / live stats / logs / system proxy integration), built in Rust + FLTK **fully native — no WebView (not Tauri/Electron)**, no embedded browser engine.
+> A local forwarding tool for development & debugging: **extremely lightweight, ~3.4MB RAM idle with GUI (2.5MB headless)**, a single ~3MB binary you can copy anywhere. Two **independent, separately startable** ways to use it: a **SOCKS5/HTTP proxy** (forward by `Host + path prefix` with path rewriting) and **mirror sites** (serve the remote frontend from a local port and route API calls to your local service — no system proxy involved). Ships with a GUI (two tabs — mirror sites and proxy, mirror sites first and selected by default — each with its own rules / live stats / logs / system proxy integration), built in Rust + FLTK **fully native — no WebView (not Tauri/Electron)**, no embedded browser engine.
 
 ## Download
 
-Don't want to build it yourself? Grab the prebuilt single-file binary (3–5 MB, fully static, no runtime required):
+Don't want to build it yourself? Grab the prebuilt single-file binary (from ~3 MB, fully static, no runtime required):
 
 | Platform | Download | Notes |
 |---|---|---|
@@ -105,6 +105,7 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 Per-release details live in **[CHANGELOG.md](CHANGELOG.md)** (the release workflow copies the matching section into each GitHub Release):
 
+- **0.8.2**: size-first release profile — the Windows binary drops from 4.6 MB to 2.9 MB (-38%); release notes are now generated from CHANGELOG
 - **0.8.1**: GitHub icon in the title bar now lines up with the minimize / close buttons; docs screenshots are captured with `PrintWindow`
 - **0.8.0**: badge at the bottom of mirrored pages (`Powered by devroute`), GitHub icon button in the title bar, fixed the large empty gap left after deleting list rows
 - All releases: [Releases](https://github.com/HKMV/devroute/releases)
