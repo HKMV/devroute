@@ -8,7 +8,7 @@
 
 ## Download
 
-Don't want to build it yourself? Grab the prebuilt single-file binary (from ~3 MB, fully static, no runtime required):
+Don't want to build it yourself? Grab the prebuilt single-file binary (Windows 2.9 MB / macOS 2.6 MB / Linux 4.4 MB, fully static, no runtime required):
 
 | Platform | Download | Notes |
 |---|---|---|
