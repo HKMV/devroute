@@ -93,7 +93,10 @@ jobs:
 
           tag = sys.argv[1]
           version = tag[1:] if tag.startswith("v") else tag
-          text = open("CHANGELOG.md", encoding="utf-8").read()
+          try:
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+          except OSError:
+              text = ""  # 老 tag 上可能还没有这个文件，走下面的占位文案
           lines = text.splitlines()
 
           start = None
