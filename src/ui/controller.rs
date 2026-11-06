@@ -6,8 +6,10 @@ use crate::daemon::{self, Command};
 use crate::ui::view::{self, View};
 use rust_i18n::t;
 use rust_i18n::set_locale;
-use fltk::enums::CallbackTrigger;
-use fltk::{app, frame::Frame, group::Pack, group::Scroll, input::Input, prelude::*};
+use fltk::{
+    app, button::Button, enums::CallbackTrigger, frame::Frame, group::Pack, group::Scroll,
+    input::Input, prelude::*,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -22,6 +24,8 @@ thread_local! {
     static SITES_RUNNING: Cell<bool> = Cell::new(false);
     /// 站点列表里正在编辑规则的站点 id（0 = 没选中）
     static SELECTED_SITE: Cell<u64> = Cell::new(0);
+    /// 浮窗里正在显示的站点 id（0 = 浮窗关着）
+    static POPUP_SITE: Cell<u64> = Cell::new(0);
 }
 
 /// 一行规则：id 做稳定标识（删除后索引会错位，id 不会）
@@ -44,6 +48,7 @@ pub struct SiteRow {
     pub inputs: [Input; 3],
     pub enable: fltk::button::CheckButton,
     pub insecure: fltk::button::CheckButton,
+    pub rules_btn: fltk::button::Button,
     pub open_btn: fltk::button::Button,
     pub del_btn: fltk::button::Button,
 }
@@ -214,6 +219,17 @@ fn clamp_scroll(pack: &Pack, content_h: i32) {
     }
 }
 
+/// 新加的行一定在列表末尾：滚到底，让刚出现的那一条落在视野里
+/// （列表比可视区短时 max=0，等于不滚）
+fn scroll_to_end(pack: &Pack) {
+    let Some(mut sc) = parent_scroll(pack) else { return };
+    let max = (pack.h() - sc.h()).max(0);
+    if sc.yposition() != max {
+        sc.scroll_to(sc.xposition(), max);
+        sc.redraw();
+    }
+}
+
 /// 行列表的实际内容高度：n 行 + 行间空隙（Pack 自己也是这么算的）
 fn content_h(n: i32, row_h: i32, gap: i32) -> i32 {
     if n <= 0 { 0 } else { n * (row_h + gap) - gap }
@@ -275,6 +291,14 @@ pub fn add_site(
         });
     }
     {
+        // 本站转发规则：点「配置」弹出居中弹窗
+        let m = model.clone();
+        let rm = site_rule_model.clone();
+        let v2 = v.clone_ref();
+        let mut b = w.rules_btn.clone();
+        b.set_callback(move |_| open_site_rules_popup(&v2, &m, &rm, id));
+    }
+    {
         // 打开时现读模型，改了地址不用重建行
         let m = model.clone();
         let v2 = v.clone_ref();
@@ -319,6 +343,10 @@ pub fn add_site(
             } else {
                 Some(selected_site())
             };
+            // 删掉的站点正开着规则浮窗，浮窗也得跟着关
+            if popup_site() == id {
+                close_site_rules_popup(&v2);
+            }
             select_site(&v2, &m, &site_rule_model, next);
         });
     }
@@ -342,6 +370,7 @@ pub fn add_site(
         inputs: [w.name, w.listen, w.upstream],
         enable: w.enable,
         insecure: w.insecure,
+        rules_btn: w.rules_btn,
         open_btn: w.open_btn,
         del_btn: w.del_btn,
     });
@@ -439,6 +468,8 @@ pub fn add_site_rule(pack: &Pack, model: &SiteRuleModel, site_model: &SiteModel,
     };
     push_site_rule_row(pack, model, site_model, site_id, idx, rule);
     resize_site_rule_pack(pack, model);
+    // 新规则在末尾，滚到底让人一眼看见
+    scroll_to_end(pack);
 }
 
 fn push_site_rule_row(
@@ -532,6 +563,151 @@ pub fn resize_site_rule_pack(pack: &Pack, model: &SiteRuleModel) {
     app::redraw();
 }
 
+/// 浮窗里正在显示的站点 id
+pub fn popup_site() -> u64 {
+    POPUP_SITE.with(|c| c.get())
+}
+
+/// 打开某个站点的「本站转发规则」弹窗：先把它切成正在编辑的站点，再亮出蒙版层。
+/// 弹窗是主窗口内的覆盖层（居中 + 圆角卡片），不占主窗口高度，也不会被别的窗口压住
+pub fn open_site_rules_popup(
+    v: &View,
+    site_model: &SiteModel,
+    rule_model: &SiteRuleModel,
+    id: u64,
+) {
+    select_site(v, site_model, rule_model, Some(id));
+    v.overlay.clone().show();
+    // 首次显示之后 Scroll 才有真实高度，这时才轮到 pack 定尺寸
+    v.rules_root.clone().layout();
+    resize_site_rule_pack(&v.site_rule_pack, rule_model);
+    // 焦点挪进弹窗：留在底下的站点输入框会继续闪光标，一重绘就在卡片上戳个洞
+    focus_first_site_rule(rule_model, &v.rules_close_btn);
+    POPUP_SITE.with(|c| c.set(id));
+    start_overlay_keepalive();
+    app::redraw();
+}
+
+thread_local! {
+    /// 「弹窗保持在最上层」的定时器是否已在跑（避免重复叠加）
+    static OVERLAY_KEEPALIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// 弹窗是窗口内的覆盖层，FLTK 并不知道谁压在谁上面：底下任何控件局部重绘
+/// （光标闪烁、统计刷新、列表布局收尾）都会在蒙版和卡片上戳个洞。
+/// 所以弹窗开着时按 0.3s 整窗重绘一次兜底 —— 整窗重绘会先把底层画一遍再画蒙版，
+/// 顺序总是对的，也不会出现蒙版叠加两层越压越黑
+fn start_overlay_keepalive() {
+    if OVERLAY_KEEPALIVE.with(|c| c.replace(true)) {
+        return;
+    }
+    app::add_timeout3(0.3, |h| {
+        if popup_site() == 0 {
+            OVERLAY_KEEPALIVE.with(|c| c.set(false));
+            return;
+        }
+        app::redraw();
+        app::repeat_timeout3(0.3, h);
+    });
+}
+
+/// 把焦点交给弹窗里的第一条规则（没有规则就交给 ✕）
+fn focus_first_site_rule(rule_model: &SiteRuleModel, close_btn: &Button) {
+    let first = rule_model
+        .borrow()
+        .first()
+        .map(|e| e.inputs[0].clone());
+    match first {
+        Some(mut inp) => {
+            inp.take_focus().ok();
+        }
+        None => {
+            let mut b = close_btn.clone();
+            b.take_focus().ok();
+        }
+    }
+}
+
+/// 关掉规则弹窗（点蒙版、点 ✕、切页签、删掉正在配置的站点）
+pub fn close_site_rules_popup(v: &View) {
+    v.overlay.clone().hide();
+    POPUP_SITE.with(|c| c.set(0));
+    app::redraw();
+}
+
+/// 启停状态 → 控件可用性
+fn set_enabled<W: WidgetExt + Clone>(w: &W, on: bool) {
+    let mut w = w.clone();
+    if on {
+        w.activate();
+    } else {
+        w.deactivate();
+    }
+}
+
+/// 主按钮：除了吞点击，还要换配色（accent 没有非激活变体，不禁用外观就等于没禁用）
+fn set_primary_enabled(b: &Button, on: bool) {
+    set_enabled(b, on);
+    let pal = view::current_pal();
+    let mut b = b.clone();
+    if on {
+        view::style_primary_btn(&mut b, pal);
+    } else {
+        view::style_primary_btn_disabled(&mut b, pal);
+    }
+}
+
+/// 跑起来之后列表只读：边跑边改会让人以为改动已经生效，实际进程里还是旧配置。
+/// 停掉之后自动恢复可编辑（「打开」按钮不在此列 —— 站点在跑时正是用它）
+pub fn refresh_editability(
+    v: &View,
+    model: &Model,
+    site_model: &SiteModel,
+    site_rule_model: &SiteRuleModel,
+) {
+    let proxy_on = PROXY_RUNNING.with(|c| c.get());
+    let sites_on = SITES_RUNNING.with(|c| c.get());
+
+    // 代理页：监听地址、系统代理、规则行、添加/保存
+    set_enabled(&v.listen_input, !proxy_on);
+    set_enabled(&v.auto_proxy, !proxy_on);
+    set_enabled(&v.add_btn, !proxy_on);
+    set_primary_enabled(&v.save_btn, !proxy_on);
+    for e in model.borrow().iter() {
+        for i in e.inputs.iter() {
+            set_enabled(i, !proxy_on);
+        }
+        set_enabled(&e.del_btn, !proxy_on);
+    }
+
+    // 本地镜像页：站点行 + 弹窗里的规则行
+    set_enabled(&v.add_site_btn, !sites_on);
+    set_primary_enabled(&v.site_save_btn, !sites_on);
+    set_primary_enabled(&v.site_page_save_btn, !sites_on);
+    set_enabled(&v.add_site_rule_btn, !sites_on);
+    for e in site_model.borrow().iter() {
+        for i in e.inputs.iter() {
+            set_enabled(i, !sites_on);
+        }
+        set_enabled(&e.enable, !sites_on);
+        set_enabled(&e.insecure, !sites_on);
+        set_enabled(&e.del_btn, !sites_on);
+        // 「配置」不锁：站点在跑时也能点开看看规则，只是弹窗里全都不可改
+    }
+    apply_site_rule_editable(site_rule_model);
+}
+
+/// 弹窗里的规则行：每次换站点都会重建，所以选中之后要按当前运行状态再刷一遍
+fn apply_site_rule_editable(rule_model: &SiteRuleModel) {
+    let on = !SITES_RUNNING.with(|c| c.get());
+    for e in rule_model.borrow().iter() {
+        for i in e.inputs.iter() {
+            set_enabled(i, on);
+        }
+        set_enabled(&e.del_btn, on);
+    }
+}
+
 /// 切换页签：两个页面叠放在 page_area 里，只显示当前页。
 /// ponytail: 不能用 Flex 的 fixed=0 隐藏 —— 子控件会被压扁但仍然绘制在容器顶部
 pub fn show_tab(v: &View, idx: usize) {
@@ -551,6 +727,10 @@ pub fn show_tab(v: &View, idx: usize) {
     }
     proxy.layout();
     site.layout();
+    // 规则浮窗属于站点页，切走就收起来
+    if popup_site() != 0 {
+        close_site_rules_popup(v);
+    }
     CURRENT_TAB.with(|c| c.set(idx));
     view::refresh_tab_btns(&mut v.tab_btns.clone(), idx, view::current_pal());
     app::redraw();
@@ -611,6 +791,8 @@ pub fn select_site(v: &View, site_model: &SiteModel, rule_model: &SiteRuleModel,
         site_model,
         (id != 0).then_some(id),
     );
+    // 换站点会重建规则行：运行中要保持只读
+    apply_site_rule_editable(rule_model);
 }
 
 /// 按当前选中态重刷站点行底色和规则区标题（切主题、切语言、增删站点后都要走这里）
@@ -682,6 +864,12 @@ pub fn wire(
         v.tab_btns[idx].set_callback(move |_| show_tab(&v2, idx));
     }
 
+    // 蒙版层：点弹窗外的暗区就关掉弹窗
+    {
+        let v2 = v.clone_ref();
+        v.mask.clone().set_callback(move |_| close_site_rules_popup(&v2));
+    }
+
     // 代理模式启停：只动代理端口，镜像站点不受影响
     {
         let proxy_slot = proxy_slot.clone();
@@ -692,6 +880,9 @@ pub fn wire(
         let mut status = v.proxy_status.clone();
         let mut icon_win = v.win.clone();
         let mut titlebar_icon = v.icon.clone();
+        let v2 = v.clone_ref();
+        let sm = site_model.clone();
+        let rm = site_rule_model.clone();
         v.proxy_start_btn.set_callback(move |b| {
             let mut slot = proxy_slot.borrow_mut();
             if let Some((tx, _)) = slot.take() {
@@ -727,6 +918,8 @@ pub fn wire(
                 b.set_label(&t!("stop"));
             }
             refresh_icon(&mut icon_win, &mut titlebar_icon);
+            // 跑起来后列表只读，停下来恢复
+            refresh_editability(&v2, &model, &sm, &rm);
         });
     }
 
@@ -738,6 +931,9 @@ pub fn wire(
         let mut status = v.site_status.clone();
         let mut icon_win = v.win.clone();
         let mut titlebar_icon = v.icon.clone();
+        let v2 = v.clone_ref();
+        let pm = model.clone();
+        let rm = site_rule_model.clone();
         v.site_start_btn.set_callback(move |b| {
             let mut slot = sites_slot.borrow_mut();
             if let Some((tx, _)) = slot.take() {
@@ -769,6 +965,8 @@ pub fn wire(
                 b.set_label(&t!("stop"));
             }
             refresh_icon(&mut icon_win, &mut titlebar_icon);
+            // 跑起来后列表只读，停下来恢复
+            refresh_editability(&v2, &pm, &site_model, &rm);
         });
     }
 
@@ -820,6 +1018,7 @@ pub fn wire(
                 },
             );
             resize_pack(&pack, &model);
+            scroll_to_end(&pack);
         });
     }
 
@@ -837,10 +1036,17 @@ pub fn wire(
             site.listen_addr = format!("127.0.0.1:{}", 8088 + n);
             add_site(&v2, &pack, &site_model, &site_rule_model, site);
             resize_site_pack(&pack, &site_model);
+            scroll_to_end(&pack);
             // 新加的站点直接选中，方便马上配它的规则
             let id = site_model.borrow().last().map(|e| e.id);
             select_site(&v2, &site_model, &site_rule_model, id);
         });
+    }
+
+    // 本站转发规则浮窗的关闭按钮
+    {
+        let v2 = v.clone_ref();
+        v.rules_close_btn.set_callback(move |_| close_site_rules_popup(&v2));
     }
 
     // 给当前选中的站点添加一条转发规则
@@ -885,33 +1091,43 @@ pub fn wire(
         });
     }
 
-    // 站点页：保存并生效（只影响镜像站点）
+    // 站点页：保存并生效（只影响本地镜像）。页底和规则弹窗里各有一个按钮，
+    // 两边都走同一段逻辑 —— 在弹窗里改完规则不必先关窗再回页底保存
     {
         let collect_config = collect_config.clone();
         let sites_slot = sites_slot.clone();
         let stats = stats.clone();
-        v.site_save_btn.set_callback(move |_| {
-            let config = collect_config();
-            if let Err(e) = config.save() {
-                tracing::error!("{}", t!("log.save_fail", e = e.to_string()));
-                return;
-            }
-            tracing::info!("{}", t!("log.saved"));
-            let enabled: Vec<Site> =
-                config.sites.iter().filter(|s| s.enable).cloned().collect();
-            let mut slot = sites_slot.borrow_mut();
-            let Some((tx, sig)) = slot.as_mut() else { return };
-            if *sig == sites_signature(&config) {
-                let _ = tx.send(Command::SetSiteRules(enabled));
-            } else {
-                tracing::info!("{}", t!("log.addr_changed_restart"));
-                let _ = tx.send(Command::Shutdown);
-                *slot = Some((
-                    daemon::spawn_sites(enabled, stats.clone()),
-                    sites_signature(&config),
-                ));
-            }
-        });
+        let mut page_save = v.site_page_save_btn.clone();
+        let mut dialog_save = v.site_save_btn.clone();
+        let install = |btn: &mut Button| {
+            let collect_config = collect_config.clone();
+            let sites_slot = sites_slot.clone();
+            let stats = stats.clone();
+            btn.set_callback(move |_| {
+                let config = collect_config();
+                if let Err(e) = config.save() {
+                    tracing::error!("{}", t!("log.save_fail", e = e.to_string()));
+                    return;
+                }
+                tracing::info!("{}", t!("log.saved"));
+                let enabled: Vec<Site> =
+                    config.sites.iter().filter(|s| s.enable).cloned().collect();
+                let mut slot = sites_slot.borrow_mut();
+                let Some((tx, sig)) = slot.as_mut() else { return };
+                if *sig == sites_signature(&config) {
+                    let _ = tx.send(Command::SetSiteRules(enabled));
+                } else {
+                    tracing::info!("{}", t!("log.addr_changed_restart"));
+                    let _ = tx.send(Command::Shutdown);
+                    *slot = Some((
+                        daemon::spawn_sites(enabled, stats.clone()),
+                        sites_signature(&config),
+                    ));
+                }
+            });
+        };
+        install(&mut page_save);
+        install(&mut dialog_save);
     }
 
     // 关窗（✕ 按钮 / 任务栏右键关闭）：恢复系统代理后退出
@@ -1004,8 +1220,11 @@ pub fn wire(
 }
 
 /// 输入框光标闪烁（FLTK 光标设计上不闪，自己实现）
+/// 注意：三处输入框都要收进来 —— 代理页监听/规则行、站点行、站点规则行，
+/// 漏掉哪一处，那一处的光标就一直是根不动的实线
 pub fn start_cursor_blink(
     model: Model,
+    site_model: SiteModel,
     site_rule_model: SiteRuleModel,
     listen_input: Input,
 ) {
@@ -1014,12 +1233,14 @@ pub fn start_cursor_blink(
         let pal = view::current_pal();
         visible = !visible;
         let m = model.borrow();
+        let sm = site_model.borrow();
         let sr = site_rule_model.borrow();
         let fp = app::focus().map(|w| w.as_widget_ptr() as usize).unwrap_or(0);
         // 只触摸当前仍在模型里的输入框，删除后的行天然跳过，无悬垂指针
         let inputs = m
             .iter()
             .flat_map(|e| e.inputs.iter().cloned())
+            .chain(sm.iter().flat_map(|e| e.inputs.iter().cloned()))
             .chain(sr.iter().flat_map(|e| e.inputs.iter().cloned()))
             .chain([listen_input.clone()]);
         for mut inp in inputs {
@@ -1356,10 +1577,18 @@ pub fn apply_theme(
         &v.site_rules_card,
     ] {
         c.clone().set_color(pal.card);
-    }
-    // 页面容器本身是窗口底色
+    }    // 页面容器本身是窗口底色
     v.page_area.clone().set_color(pal.bg);
-    for c in [&v.page_proxy, &v.page_site] {
+    // 规则弹窗：蒙版层铺满整窗，卡片跟着主题走
+    v.mask.clone().set_color(pal.bg);
+    v.rules_root.clone().set_color(pal.card);
+    v.rules_head.clone().set_color(pal.card);
+    {
+        let mut rc = v.rules_close_btn.clone();
+        rc.set_color(pal.card);
+        rc.set_label_color(pal.subtext);
+        rc.redraw();
+    }    for c in [&v.page_proxy, &v.page_site] {
         c.clone().set_color(pal.bg);
     }
     // 状态灯颜色跟随各自的运行状态
@@ -1435,6 +1664,7 @@ pub fn apply_theme(
             cb.set_color(pal.input_bg);
             cb.set_selection_color(pal.accent);
         }
+        view::style_ghost_btn(&mut e.rules_btn.clone(), pal);
         view::style_ghost_btn(&mut e.open_btn.clone(), pal);
         let mut d = e.del_btn.clone();
         d.set_color(pal.input_bg);
@@ -1446,6 +1676,7 @@ pub fn apply_theme(
     }
     view::style_ghost_btn(&mut v.add_site_rule_btn.clone(), pal);
     view::style_primary_btn(&mut v.site_save_btn.clone(), pal);
+    view::style_primary_btn(&mut v.site_page_save_btn.clone(), pal);
     for e in site_rule_model.borrow().iter() {
         e.widget.clone().set_color(pal.card);
         for inp in &e.inputs {
@@ -1467,6 +1698,10 @@ pub fn apply_theme(
     let mut ld = v.log_disp.clone();
     ld.set_color(pal.input_bg);
     ld.set_text_color(pal.text);
+    // 日志自带的滚动条也按列表同款刷（否则还是系统默认的宽条）
+    view::style_text_scrollbars(&v.log_disp, pal);
+    // 上面把主按钮重刷回主色了，运行中的锁定态得再盖一次，否则禁用按钮看着还能点
+    refresh_editability(v, model, site_model, site_rule_model);
     app::redraw();
 }
 
@@ -1536,6 +1771,7 @@ fn refresh_i18n(
     }
     v.add_site_btn.clone().set_label(&t!("add_site"));
     for e in site_model.borrow().iter() {
+        e.rules_btn.clone().set_label(&t!("site_rule_cfg"));
         e.open_btn.clone().set_label(&t!("site_open"));
         e.del_btn.clone().set_label(&t!("rule_delete"));
         e.insecure.clone().set_label(&t!("site_insecure"));
@@ -1554,6 +1790,7 @@ fn refresh_i18n(
     }
     v.add_site_rule_btn.clone().set_label(&t!("add_rule"));
     v.site_save_btn.clone().set_label(&t!("save_apply"));
+    v.site_page_save_btn.clone().set_label(&t!("save_apply"));
     for e in site_rule_model.borrow().iter() {
         e.del_btn.clone().set_label(&t!("rule_delete"));
     }

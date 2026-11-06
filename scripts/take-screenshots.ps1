@@ -18,7 +18,7 @@ public class Win {
 [Win]::SetProcessDPIAware() | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 
-function Shot([string]$theme, [string]$lang, [int]$tab, [string]$outFile) {
+function Shot([string]$theme, [string]$lang, [int]$tab, [string]$outFile, [string]$popup = "") {
   $work = Join-Path $env:TEMP ("devroute_shot_" + [guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Force $work | Out-Null
   Set-Content -Encoding ascii (Join-Path $work "config.toml") @"
@@ -66,6 +66,8 @@ matcher = { addr = "192.168.120.181:81", path_prefix = "/api" }
 forward = { addr = "127.0.0.1:8886", path_prefix = "" }
 "@
   $env:DEVROUTE_UI_TAB = "$tab"
+  # 传站点序号就让程序启动即展开该站点的规则弹窗（截图用，普通运行不读这个变量）
+  $env:DEVROUTE_UI_POPUP = $popup
   $p = Start-Process -FilePath $Exe -WorkingDirectory $work -PassThru
   $h = [IntPtr]::Zero
   for ($i = 0; $i -lt 50; $i++) {
@@ -75,7 +77,8 @@ forward = { addr = "127.0.0.1:8886", path_prefix = "" }
   }
   if ($h -eq [IntPtr]::Zero) { throw "window not found ($theme/$lang)" }
   [Win]::SetForegroundWindow($h) | Out-Null
-  Start-Sleep -Milliseconds 800
+  # 展开弹窗的那几张要等弹窗自己的重绘兜底跑一轮，否则可能拍到半张卡片
+  if ($popup -ne "") { Start-Sleep -Milliseconds 1200 } else { Start-Sleep -Milliseconds 800 }
   $r = New-Object Win+RECT
   if (-not [Win]::GetWindowRect($h, [ref]$r)) { throw "GetWindowRect failed" }
   $w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top
@@ -103,7 +106,7 @@ forward = { addr = "127.0.0.1:8886", path_prefix = "" }
   Start-Sleep -Milliseconds 600
 }
 
-# 0 = 镜像站点页（默认页） 1 = 代理模式页
+# 0 = 本地镜像页（默认页） 1 = 代理模式页
 Shot "light" "zh" 0 (Join-Path $OutDir "screenshot-sites-light.png")
 Shot "dark"  "zh" 0 (Join-Path $OutDir "screenshot-sites-dark.png")
 Shot "light" "en" 0 (Join-Path $OutDir "screenshot-sites-light-en.png")
@@ -112,3 +115,6 @@ Shot "light" "zh" 1 (Join-Path $OutDir "screenshot-light.png")
 Shot "dark"  "zh" 1 (Join-Path $OutDir "screenshot-dark.png")
 Shot "light" "en" 1 (Join-Path $OutDir "screenshot-light-en.png")
 Shot "dark"  "en" 1 (Join-Path $OutDir "screenshot-dark-en.png")
+# 站点规则弹窗（第 5 个参数 = 展开第 0 个站点的规则）
+Shot "light" "zh" 0 (Join-Path $OutDir "screenshot-dialog-light.png") "0"
+Shot "dark"  "zh" 0 (Join-Path $OutDir "screenshot-dialog-dark.png") "0"

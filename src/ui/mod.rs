@@ -17,9 +17,19 @@ pub fn apply_global_style(dark: bool) -> view::Palette {
     // 基础主题修系统件（滚动条等），上层配色全部手动覆盖
     WidgetTheme::new(if dark { ThemeType::Dark } else { ThemeType::Greybird }).apply();
     // 上面这一步会重定义标准框型，自定义框型必须放在它之后覆盖
-    // RFlatBox=6px 圆角；DownBox=2px 微圆角平底（复选框走这条路画 ✓）
+    // RFlatBox=6px 圆角纯填充；RoundUpBox=6px 圆角填充+1px 描边（输入框专用）；
+    // DownBox=2px 微圆角填充+描边（复选框走这条路画 ✓）
     app::set_frame_type_cb(FrameType::RFlatBox, view::draw_flat_round, 0, 0, 0, 0);
-    app::set_frame_type_cb(FrameType::DownBox, view::draw_flat_round_small, 0, 0, 0, 0);
+    // 输入框框型给 2px 左右内缩：FLTK 的输入框文字就贴在 box 内沿，不内缩光标会压在描边上
+    app::set_frame_type_cb(FrameType::RoundUpBox, view::draw_input_round, 2, 0, 4, 0);
+    // BorderBox=行内小按钮的填充+描边（本项目没有别处用 FL_BORDER_BOX）
+    app::set_frame_type_cb(FrameType::BorderBox, view::draw_btn_round, 0, 0, 0, 0);
+    // RoundedBox=滚动条滑块（圆头细条；同一个框型也画滚动条两端的箭头按钮，那里按尺寸跳过）
+    app::set_frame_type_cb(FrameType::RoundedBox, view::draw_scroll_thumb, 0, 0, 0, 0);
+    // ShadowBox=弹窗蒙版（半透明铺满）；OvalBox=弹窗卡片（12px 圆角 + 描边）
+    app::set_frame_type_cb(FrameType::ShadowBox, view::draw_mask, 0, 0, 0, 0);
+    app::set_frame_type_cb(FrameType::OvalBox, view::draw_dialog_card, 0, 0, 0, 0);
+    app::set_frame_type_cb(FrameType::DownBox, view::draw_flat_round_small, 1, 1, 2, 2);
     app::set_font_size(14);
     // 注意：不要全局 set_visible_focus(false)，否则输入框光标不闪；
     // 焦点框在各按钮上单独关闭
@@ -97,12 +107,33 @@ pub fn run() -> anyhow::Result<()> {
         &stats,
     );
     controller::start_stats_timer(stats.clone(), v.stats.clone());
-    controller::start_cursor_blink(model.clone(), site_rule_model.clone(), v.listen_input.clone());
+    controller::start_cursor_blink(
+        model.clone(),
+        site_model.clone(),
+        site_rule_model.clone(),
+        v.listen_input.clone(),
+    );
     // 点站点行即选中（输入框靠焦点轮询、按钮靠各自回调、空白区靠行回调）
     controller::start_site_row_watch(&v, &site_model, &site_rule_model);
 
     v.win.show();
     view::platform_window_fixups(&v.win);
+
+    // 截图脚本用：DEVROUTE_UI_POPUP=<站点序号> 启动就展开该站点的规则弹窗（普通运行不受影响）
+    if let Some(idx) = std::env::var("DEVROUTE_UI_POPUP")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        let v2 = v.clone_ref();
+        let site_model2 = site_model.clone();
+        let rule_model2 = site_rule_model.clone();
+        // 等一帧：蒙版层要等窗口真正布局完才有尺寸
+        app::add_timeout3(0.3, move |_| {
+            if let Some(id) = controller::site_id_at(&site_model2, idx) {
+                controller::open_site_rules_popup(&v2, &site_model2, &rule_model2, id);
+            }
+        });
+    }
 
     // 隐藏自测：PROXY_FORWARD_UI_TEST=1 时模拟删除第一行 + 点主题按钮，验证后退出
     #[cfg(debug_assertions)]

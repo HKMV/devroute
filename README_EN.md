@@ -4,7 +4,7 @@
 
 [English](README_EN.md) | 中文
 
-> A local forwarding tool for development & debugging: **extremely lightweight, ~3.4MB RAM idle with GUI (2.5MB headless)**, a single ~3MB binary you can copy anywhere. Two **independent, separately startable** ways to use it: a **SOCKS5/HTTP proxy** (forward by `Host + path prefix` with path rewriting) and **mirror sites** (serve the remote frontend from a local port and route API calls to your local service — no system proxy involved). Ships with a GUI (two tabs — mirror sites and proxy, mirror sites first and selected by default — each with its own rules / live stats / logs / system proxy integration), built in Rust + FLTK **fully native — no WebView (not Tauri/Electron)**, no embedded browser engine.
+> A local forwarding tool for development & debugging: **extremely lightweight, ~3.4MB RAM idle with GUI (2.5MB headless)**, a single ~3MB binary you can copy anywhere. Two **independent, separately startable** ways to use it: a **SOCKS5/HTTP proxy** (forward by `Host + path prefix` with path rewriting) and **local mirrors** (serve the remote frontend from a local port and route API calls to your local service — no system proxy involved). Ships with a GUI (two tabs — local mirrors and proxy, local mirrors first and selected by default — each with its own rules / live stats / logs / system proxy integration), built in Rust + FLTK **fully native — no WebView (not Tauri/Electron)**, no embedded browser engine.
 
 ## Download
 
@@ -23,25 +23,31 @@ Building from source is described [below](#packaging--distribution).
 
 ## Screenshots
 
-| Mirror sites (default tab) | Proxy mode |
+| Local mirrors (default tab) | Proxy mode |
 |---|---|
-| ![Mirror sites](docs/screenshot-sites-light-en.png) | ![Proxy mode](docs/screenshot-light-en.png) |
+| ![Local mirrors](docs/screenshot-sites-light-en.png) | ![Proxy mode](docs/screenshot-light-en.png) |
 
-| Dark theme (mirror sites) | Dark theme (proxy mode) |
+| Dark theme (local mirrors) | Dark theme (proxy mode) |
 |---|---|
-| ![Dark theme — mirror sites](docs/screenshot-sites-dark-en.png) | ![Dark theme](docs/screenshot-dark-en.png) |
+| ![Dark theme — local mirrors](docs/screenshot-sites-dark-en.png) | ![Dark theme](docs/screenshot-dark-en.png) |
+
+Site rules dialog (opens from the **Configure** button on a site row):
+
+| Light | Dark |
+|---|---|
+| ![Rules dialog](docs/screenshot-dialog-light.png) | ![Rules dialog — dark](docs/screenshot-dialog-dark.png) |
 
 ## Features
 
-- **Two fully decoupled modes**: proxy mode and mirror sites each have their own tab, their own settings, and their own start/stop button and status light. Run mirror sites with the proxy port completely closed, or run the proxy without touching sites — neither affects the other
+- **Two fully decoupled modes**: proxy mode and local mirrors each have their own tab, their own settings, and their own start/stop button and status light. Run local mirrors with the proxy port completely closed, or run the proxy without touching sites — neither affects the other
 - **Dual-protocol proxy**: a single listening port auto-detects SOCKS5 and HTTP proxy traffic (CONNECT + absolute-form requests)
-- **Mirror sites (multiple)**: each site gets a local port; the page comes from the remote site while API paths are forwarded to your local service. Just open the local URL — **no system proxy, no CORS or cross-site cookie pain**. Upstreams may be `http://` or `https://` (self-signed internal certs supported via "skip cert check")
-- **Rule-based forwarding**: match by `Host:Port` + request path prefix, forward to the target and rewrite the path prefix. Proxy mode uses `[[proxy_rules]]` (matched by host), each mirror site uses its own embedded `[[sites.rules]]` (matched by path prefix only) — the two rule sets never interfere
+- **Local mirrors (multiple)**: each site gets a local port; the page comes from the remote site while API paths are forwarded to your local service. Just open the local URL — **no system proxy, no CORS or cross-site cookie pain**. Upstreams may be `http://` or `https://` (self-signed internal certs supported via "skip cert check")
+- **Rule-based forwarding**: match by `Host:Port` + request path prefix, forward to the target and rewrite the path prefix. Proxy mode uses `[[proxy_rules]]` (matched by host), each local mirror uses its own embedded `[[sites.rules]]` (matched by path prefix only) — the two rule sets never interfere
 - **On-page forwarding banner**: in proxy mode, pages matching a rule get a translucent banner at top-center (matched path → forward target + prefix), making it obvious what's being forwarded; injected responses are marked `no-store` so the banner disappears once the proxy stops (pages cached before enabling need one hard refresh, Ctrl+F5)
-- **Mirrored-page badge**: HTML pages served through a mirror site get a fixed bottom-center badge — `Powered by devroute` in the English UI, 由 devroute 提供支持 in Chinese. Inline styles only, no external assets, never blocks clicks; injected only into full documents, so HTML fragments from AJAX plus JS/CSS/JSON are left untouched
+- **Mirrored-page badge**: HTML pages served through a local mirror get a fixed bottom-center badge — `Powered by devroute` in the English UI, 由 devroute 提供支持 in Chinese. Inline styles only, no external assets, never blocks clicks; injected only into full documents, so HTML fragments from AJAX plus JS/CSS/JSON are left untouched
 - **Crash leftover cleanup**: system proxy settings left behind by an unexpected exit are detected and cleared on next launch — a dead proxy is never "restored"
 - **Running-state icon**: taskbar and in-app icon change color with proxy start/stop (Windows / Linux X11; on macOS the Dock shows the app icon, but the in-app icon still reflects state)
-- **GUI desktop app** (default): two tabs up top (mirror sites / proxy mode, sites on the left and open by default), each managing its own settings — site & rule CRUD, save with hot reload, open a site in the browser with one click, connection/traffic stats, live logs, one-click system proxy, light/dark theme, Chinese/English UI; the three title-bar buttons (GitHub / minimize / close) share the same size and baseline with a hover highlight, and the **GitHub button** opens the project page and shows the repo URL on hover
+- **GUI desktop app** (default): two tabs up top (local mirrors / proxy mode, sites on the left and open by default), each managing its own settings — site & rule CRUD, save with hot reload, open a site in the browser with one click, connection/traffic stats, live logs, one-click system proxy, light/dark theme, Chinese/English UI; per-site rules are edited in a centered dialog (translucent scrim + rounded card, click outside to close) and the lists go read-only once started; the three title-bar buttons (GitHub / minimize / close) share the same size and baseline with a hover highlight, and the **GitHub button** opens the project page and shows the repo URL on hover
 - **Lightweight**: ~3.4MB idle with GUI (~4MB while proxying, grows with traffic); `--headless` mode sits at ~2.5MB, ideal for leaving running
 - Auto-generates a default `config.toml`; config changes take effect immediately
 - Failed forwards return 503 or fall back to the original address
@@ -81,19 +87,21 @@ Note: the config file is `config.toml` in the **directory the program runs from*
 
 ### Using the GUI
 
-The window has two tabs at the top. Settings and start/stop are fully separate; stats and logs are shared at the bottom. **The left tab — mirror sites — is what opens by default.**
+The window has two tabs at the top. Settings and start/stop are fully separate; stats and logs are shared at the bottom. **The left tab — local mirrors — is what opens by default.**
 
-**Mirror sites tab (left, default)**
+**Local mirrors tab (left, default)**
 
 - **Site list**: each row is one local port plus one upstream. Enable it, hit "Start", and the local address shows the upstream page. The row's "Open" button launches your default browser; "Skip" disables upstream certificate verification (for self-signed internal certs)
-- **Site rules**: click any row in the site list (including the inputs and checkboxes inside it) and the panel below switches to that site's own rules (path prefix → local address + forward prefix); the title shows the site name. Every site keeps its own rule list, unrelated to the proxy rules
-- "Save & Apply" writes the config: rule-only changes hot reload without dropping connections; changing a port/upstream/enabled flag restarts the sites
+- **Site rules**: click the **Configure** button on a site row to open a centered dialog (translucent scrim + rounded card) with that site's own rules (path prefix → local address + forward prefix); the title shows the site name, and clicking the scrim or the ✕ closes it. Every site keeps its own rule list, unrelated to the proxy rules
+- **Click a row to select it**: clicking anywhere on a site row (including its inputs) selects that row and focuses the input, so one click is enough to start editing
+- **Read-only while running**: once the site service is started the site list and the rules dialog are disabled as a whole ("Configure" and "Open" still work) so nobody assumes an edit already took effect; stopping restores editing
+- "Save changes" writes the config (there is one at the bottom of the page and one inside the rules dialog — both do the same): rule-only changes hot reload without dropping connections; changing a port/upstream/enabled flag restarts the sites
 
 **Proxy mode tab (right)**
 
 - **Listen address**: local proxy port, default `127.0.0.1:1080`
 - **System proxy**: when checked, starting the proxy writes system settings automatically (Windows registry / macOS networksetup / Linux gsettings), and reverts on stop or window close
-- **Forwarding rules**: match host + path prefix → forward host + path prefix; click "Save & Apply" to write `config.toml` and hot reload (changing the listen address restarts the proxy)
+- **Forwarding rules**: match host + path prefix → forward host + path prefix; click "Save changes" to write `config.toml` and hot reload (changing the listen address restarts the proxy)
 
 **Shared**
 
@@ -105,6 +113,7 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 Per-release details live in **[CHANGELOG.md](CHANGELOG.md)** (the release workflow copies the matching section into each GitHub Release):
 
+- **0.9.0**: site rules moved into a centered dialog (translucent scrim + rounded card), "Save changes" back at the bottom of the sites page, lists go read-only while running, outlined row buttons, slimmer scrollbars
 - **0.8.2**: size-first release profile — the Windows binary drops from 4.6 MB to 2.9 MB (-38%); release notes are now generated from CHANGELOG
 - **0.8.1**: GitHub icon in the title bar now lines up with the minimize / close buttons; docs screenshots are captured with `PrintWindow`
 - **0.8.0**: badge at the bottom of mirrored pages (`Powered by devroute`), GitHub icon button in the title bar, fixed the large empty gap left after deleting list rows
@@ -126,7 +135,7 @@ auto_proxy = false                # set system proxy on start (GUI)
 matcher = { addr = "192.168.120.177:81", path_prefix = "/api" }
 forward = { addr = "127.0.0.1:8686", path_prefix = "" }
 
-# ---------- mirror sites ----------
+# ---------- local mirrors ----------
 [[sites]]
 enable = true
 name = "dev site"                                # label for the UI / logs only
@@ -169,13 +178,13 @@ Field reference:
 
 Example: request `http://192.168.120.177:81/api/users` → forwarded to `http://127.0.0.1:8686/users`
 
-> Legacy configs still load: `listen_addr` and `[[rules]]` are read as `proxy_listen` and `[[proxy_rules]]`, and are rewritten in the new format on save. Old rules no longer apply to mirror sites — put each site's rules under its own `[[sites.rules]]`.
+> Legacy configs still load: `listen_addr` and `[[rules]]` are read as `proxy_listen` and `[[proxy_rules]]`, and are rewritten in the new format on save. Old rules no longer apply to local mirrors — put each site's rules under its own `[[sites.rules]]`.
 
 ## Usage
 
-### Option 1: Mirror site (recommended — no system proxy changes)
+### Option 1: Local mirror (recommended — no system proxy changes)
 
-1. Configure a `[[sites]]` entry and put that site's forward rules in the `[[sites.rules]]` that follows it (or fill both in on the GUI's "Mirror Sites" tab)
+1. Configure a `[[sites]]` entry and put that site's forward rules in the `[[sites.rules]]` that follows it (or fill both in on the GUI's "Local Mirrors" tab)
 2. Hit "Start" and open `http://127.0.0.1:8088` in a browser
 3. The page comes from the upstream site; requests matching the site's rules (e.g. `/api`) go to your local service
 
@@ -183,7 +192,7 @@ How it differs from the system-proxy approach:
 
 - **No system settings touched**, so it never fights an existing proxy (Clash and friends)
 - **Same origin**: page and API are both `127.0.0.1:8088` — no CORS preflights, cookies just work, SSE/WebSocket behave normally
-- **Independent from proxy mode**: you can run mirror sites with the proxy port completely closed, and the two rule sets don't touch each other
+- **Independent from proxy mode**: you can run local mirrors with the proxy port completely closed, and the two rule sets don't touch each other
 - Several sites can run at once (one local port each), and you can hand the URL to a colleague
 
 Under the hood it is a local reverse proxy that rewrites the upstream origin to the local one: absolute URLs inside HTML/JS/CSS/JSON, `Set-Cookie` `Domain`, and `Location` redirects are rewritten, while `CSP`, `Alt-Svc` and `integrity` (SRI) are dropped because rewritten content no longer matches the original hashes. Upstream requests keep their original headers (minus `Accept-Encoding`) and restore `Host`, so vhost and Origin checks still pass.
@@ -251,7 +260,7 @@ src/
   core/
     socks.rs         # SOCKS5 handling + protocol sniffing (first byte 0x05)
     http.rs          # HTTP path rewriting + HTTP proxy (CONNECT / absolute-form) + on-page banner injection
-    mirror.rs        # Mirror site: local reverse proxy + origin rewriting + TLS upstreams + WebSocket tunneling
+    mirror.rs        # Local mirror: local reverse proxy + origin rewriting + TLS upstreams + WebSocket tunneling
     route.rs         # Route rule matching (host+prefix for proxy, prefix-only per site; hot-updated via RwLock)
     config.rs        # Config load/save (inline-table TOML; reads legacy listen_addr / [[rules]])
     stats.rs         # Atomic connection/traffic counters

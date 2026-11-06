@@ -2,11 +2,12 @@
 
 use crate::core::config::{AppConfig, Rule, Site, SiteRule};
 use rust_i18n::t;
-use fltk::enums::{Align, Color, Event, FrameType};
+use fltk::enums::{Align, Color, ColorDepth, Event, FrameType};
 use fltk::app;
 use fltk::group::{Flex, Group, Pack, PackType, Scroll};
+use fltk::image::RgbImage;
 use fltk::text::{TextBuffer, TextDisplay};
-use fltk::{button::{Button, CheckButton}, frame::Frame, input::Input, prelude::*, window::Window};
+use fltk::{button::{Button, CheckButton}, frame::Frame, input::Input, prelude::*, valuator::Scrollbar, window::Window};
 use std::cell::Cell;
 
 thread_local! {
@@ -41,9 +42,9 @@ pub const ROW_W: i32 = ROW_CONTENT_W + 10;
 /// 站点行与规则行同高：两页控件尺寸一致，视觉上才是一套东西
 pub const SITE_ROW_H: i32 = ROW_H;
 pub const SITE_ROW_GAP: i32 = ROW_GAP;
-/// 站点行内容宽：边距4*2 + 启用26 + 名称120 + 本地120 + 上游190 + 跳过校验90 + 按钮114 + 点击垫10*5
+/// 站点行内容宽：边距4*2 + 启用26 + 名称120 + 本地120 + 上游190 + 跳过校验90 + 按钮(52*3 + 间隙6*2) + 点击垫10*5
 pub const SITE_ROW_CONTENT_W: i32 =
-    4 + 26 + 10 + 120 + 10 + 120 + 10 + 190 + 10 + 90 + 10 + 114 + 4;
+    4 + 26 + 10 + 120 + 10 + 120 + 10 + 190 + 10 + 90 + 10 + 168 + 4;
 pub const SITE_ROW_W: i32 = SITE_ROW_CONTENT_W + 10;
 
 /// 站点内嵌规则行：前缀 → 转发地址 + 转发前缀
@@ -53,6 +54,15 @@ pub const SITE_RULE_ROW_GAP: i32 = ROW_GAP;
 pub const SITE_RULE_ROW_CONTENT_W: i32 =
     4 + 110 + 10 + 24 + 10 + 190 + 10 + 110 + 10 + 52 + 4;
 pub const SITE_RULE_ROW_W: i32 = SITE_RULE_ROW_CONTENT_W + 10;
+
+/// 「本站转发规则」弹窗尺寸。宽 = 规则行宽 + 8 滚动条 + 16 卡片内边距(8*2) + 24 弹窗外边距(12*2)，
+/// 保证表格正好铺满卡片；高固定，切站点时弹窗不跳
+pub const DIALOG_W: i32 = SITE_RULE_ROW_W + 8 + 16 + 24;
+pub const DIALOG_H: i32 = 380;
+
+/// 主窗口尺寸：宽度要容下最宽的站点行（6 列 + 三个行按钮）且留出滚动条空间
+pub const WIN_W: i32 = 860;
+pub const WIN_H: i32 = 820;
 
 /// 扁平化配色
 #[derive(Clone, Copy)]
@@ -69,6 +79,7 @@ pub struct Palette {
     pub danger: Color,   // 删除
     pub ok: Color,       // 运行状态
     pub border: Color,   // 窗口边框
+    pub field_border: Color, // 输入框/复选框描边（比 border 重一档，浅底上要看得见）
 }
 
 pub fn palette(dark: bool) -> Palette {
@@ -88,6 +99,7 @@ pub fn palette(dark: bool) -> Palette {
             danger: Color::from_hex(0xef4444),
             ok: Color::from_hex(0x34d399),
             border: Color::from_hex(0x374151),
+            field_border: Color::from_hex(0x6b7280),
         }
     } else {
         Palette {
@@ -103,6 +115,7 @@ pub fn palette(dark: bool) -> Palette {
             danger: Color::from_hex(0xdc2626),
             ok: Color::from_hex(0x059669),
             border: Color::from_hex(0xe5e7eb),
+            field_border: Color::from_hex(0xd1d5db),
         }
     }
 }
@@ -116,13 +129,79 @@ pub fn draw_flat_round(x: i32, y: i32, w: i32, h: i32, c: Color) {
     fltk::draw::draw_rounded_rectf(x, y, w, h, CORNER_R);
 }
 
-/// 微圆角（复选框等小控件用）：借用从未使用的 RShadowBox 框型
+/// 微圆角（复选框等小控件用）：借用从未使用的 DownBox 框型
 const CORNER_R_SMALL: i32 = 2;
 
+/// 复选框框体：填充 + 1px 描边（不描边的话空格子在浅底上等于隐形）
 pub fn draw_flat_round_small(x: i32, y: i32, w: i32, h: i32, c: Color) {
     fltk::draw::set_draw_color(c);
     fltk::draw::draw_rounded_rectf(x, y, w, h, CORNER_R_SMALL);
+    fltk::draw::set_draw_color(current_pal().field_border);
+    fltk::draw::draw_rounded_rect(x, y, w, h, CORNER_R_SMALL);
 }
+
+/// 输入框框体：填充 + 1px 圆角描边。
+/// 单独占一个框型（RoundUpBox 本项目没别处用），不能改 RFlatBox ——
+/// 卡片、按钮、页签都走 RFlatBox，一加描边全窗都是线
+pub fn draw_input_round(x: i32, y: i32, w: i32, h: i32, c: Color) {
+    fltk::draw::set_draw_color(c);
+    fltk::draw::draw_rounded_rectf(x, y, w, h, CORNER_R);
+    fltk::draw::set_draw_color(current_pal().field_border);
+    fltk::draw::draw_rounded_rect(x, y, w, h, CORNER_R);
+}
+
+/// 行内按钮框体：填充 + 1px 圆角描边（与输入框同一档描边，行内看起来才是一套）
+pub fn draw_btn_round(x: i32, y: i32, w: i32, h: i32, c: Color) {
+    fltk::draw::set_draw_color(c);
+    fltk::draw::draw_rounded_rectf(x, y, w, h, CORNER_R);
+    fltk::draw::set_draw_color(current_pal().field_border);
+    fltk::draw::draw_rounded_rect(x, y, w, h, CORNER_R);
+}
+
+/// 弹窗圆角：比控件圆角大一圈，蒙版之上才看得出是一张浮起来的卡片
+const DIALOG_R: i32 = 12;
+
+/// 弹窗卡片：圆角填充 + 1px 描边（圆角外露出的就是压暗后的背景）
+pub fn draw_dialog_card(x: i32, y: i32, w: i32, h: i32, c: Color) {
+    fltk::draw::set_draw_color(c);
+    fltk::draw::draw_rounded_rectf(x, y, w, h, DIALOG_R);
+    fltk::draw::set_draw_color(current_pal().border);
+    fltk::draw::draw_rounded_rect(x, y, w, h, DIALOG_R);
+}
+
+thread_local! {
+    /// 蒙版用的半透明黑位图。FLTK 的普通色块没有透明度，只有图片绘制会做 alpha 混合，
+    /// 所以蒙版靠「画一张半透明图」实现，而不是画纯色矩形。
+    /// ponytail: 按窗口尺寸缓存整张图（860x820 约 2.8MB），比每帧拼 1x1 缩放稳，
+    /// 因为 FLTK 缩放绘制走的是最近邻取样，1x1 拉伸在部分平台直接什么都不画
+    static MASK_IMG: std::cell::RefCell<Option<(i32, i32, RgbImage)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 蒙版层：铺满整窗的半透明黑，把底下的界面压暗
+pub fn draw_mask(x: i32, y: i32, w: i32, h: i32, _c: Color) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    MASK_IMG.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let stale = !matches!(&*slot, Some((iw, ih, _)) if *iw == w && *ih == h);
+        if stale {
+            let mut buf = vec![0u8; w as usize * h as usize * 4];
+            for px in buf.chunks_exact_mut(4) {
+                px[3] = MASK_ALPHA;
+            }
+            let img = RgbImage::new(&buf, w, h, ColorDepth::Rgba8).expect("蒙版位图");
+            *slot = Some((w, h, img));
+        }
+        if let Some((_, _, img)) = slot.as_mut() {
+            img.draw(x, y, w, h);
+        }
+    });
+}
+
+/// 蒙版黑的不透明度（0-255）
+const MASK_ALPHA: u8 = 0x6b;
 
 
 
@@ -132,7 +211,7 @@ fn style_card<G: GroupExt>(g: &mut G, pal: Palette) {
 }
 
 pub(crate) fn style_input(inp: &mut Input, pal: Palette) {
-    inp.set_frame(FrameType::RFlatBox);
+    inp.set_frame(FrameType::RoundUpBox);
     inp.set_color(pal.input_bg);
     inp.set_text_color(pal.text);
     inp.set_text_size(14);
@@ -147,12 +226,27 @@ pub(crate) fn style_primary_btn(b: &mut Button, pal: Palette) {
     b.visible_focus(false); // 焦点虚线框丑，但全局关掉会导致输入框光标不闪
 }
 
+/// 主按钮的禁用配色：accent 是 RGB 色，FLTK 没有它的「非激活变体」，
+/// set_enabled(false) 只吞点击、外观一点不变，看着还像能点，所以禁用时手动换成灰底灰字
+pub(crate) fn style_primary_btn_disabled(b: &mut Button, pal: Palette) {
+    b.set_color(pal.input_bg);
+    b.set_label_color(pal.subtext);
+}
+
 pub(crate) fn style_ghost_btn(b: &mut Button, pal: Palette) {
-    b.set_frame(FrameType::RFlatBox);
-    b.set_down_frame(FrameType::RFlatBox);
+    // 行内小按钮（配置/打开/添加）也带 1px 描边：纯填充在浅底白卡上几乎没有边界，
+    // 看不出是按钮。框型见 mod.rs 里 BorderBox 的注册
+    b.set_frame(FrameType::BorderBox);
+    b.set_down_frame(FrameType::BorderBox);
     b.set_color(pal.input_bg);
     b.set_label_color(pal.text);
     b.visible_focus(false);
+}
+
+/// 行内「删除」按钮：与 ghost 按钮同框，只把文字换成危险色
+pub(crate) fn style_danger_btn(b: &mut Button, pal: Palette) {
+    style_ghost_btn(b, pal);
+    b.set_label_color(pal.danger);
 }
 
 /// 复选框统一字号：FLTK 的框大小直接取 labelsize，调大才会跟着变大
@@ -219,6 +313,15 @@ pub struct View {
     pub site_scroll: Scroll,
     pub site_pack: Pack,
     pub add_site_btn: Button,
+    /// 站点页底部的「保存并生效」：站点行（名称/端口/上游/启用）改完直接存，
+    /// 不用先点「配置」进弹窗再保存
+    pub site_page_save_btn: Button,
+    // ---- 本站转发规则弹窗（点站点行「配置」弹出的蒙版层） ----
+    pub overlay: Group,
+    pub mask: Button,
+    pub rules_root: Flex,
+    pub rules_head: Flex,
+    pub rules_close_btn: Button,
     pub site_rules_card: Flex,
     pub site_rule_cap: Frame,
     pub site_rule_header_frames: Vec<Frame>,
@@ -279,6 +382,12 @@ impl View {
             site_scroll: self.site_scroll.clone(),
             site_pack: self.site_pack.clone(),
             add_site_btn: self.add_site_btn.clone(),
+            site_page_save_btn: self.site_page_save_btn.clone(),
+            overlay: self.overlay.clone(),
+            mask: self.mask.clone(),
+            rules_root: self.rules_root.clone(),
+            rules_head: self.rules_head.clone(),
+            rules_close_btn: self.rules_close_btn.clone(),
             site_rules_card: self.site_rules_card.clone(),
             site_rule_cap: self.site_rule_cap.clone(),
             site_rule_header_frames: self.site_rule_header_frames.clone(),
@@ -413,6 +522,11 @@ fn attach_drag<W: WidgetBase>(w: &mut W, win: &Window) {
     });
 }
 
+/// 控件矩形是否覆盖鼠标（FLTK 的控件坐标本来就已经是窗口绝对坐标，不用再往上加父级）
+fn mouse_over<W: WidgetExt>(w: &W) -> bool {
+    app::event_inside(w.x(), w.y(), w.w(), w.h())
+}
+
 /// 扁平滚动条：细条 + 平槽隐形 + 圆角滑块
 pub(crate) fn style_scroll(scroll: &mut Scroll, pal: Palette) {
     scroll.set_frame(FrameType::NoBox);
@@ -420,11 +534,52 @@ pub(crate) fn style_scroll(scroll: &mut Scroll, pal: Palette) {
     //（FLTK 首尾箭头按钮和滑块共用配色，8px 下只剩两个不可见的微点）
     scroll.set_scrollbar_size(8);
     for mut sb in [scroll.scrollbar(), scroll.hscrollbar()] {
-        sb.set_frame(FrameType::FlatBox);
-        sb.set_color(pal.card);
-        sb.set_selection_color(pal.border);
-        sb.set_slider_frame(FrameType::RFlatBox);
-        sb.set_label_color(pal.border);
+        style_plain_scrollbar(&mut sb, pal);
+    }
+    // 只在鼠标真的压在本列表上时才让滚轮生效：
+    // Fl_Group 会把没人认领的滚轮事件转发给所有兄弟控件，于是日志区一滚就把站点列表带走了。
+    // 注意必须先 super_handle_first(false) —— fltk-rs 默认让 FLTK 内建 handle 先执行，
+    // 内建那一跑列表就已经滚了，事后在闭包里吞事件根本来不及
+    scroll.super_handle_first(false);
+    scroll.handle(|s, ev| ev == Event::MouseWheel && !mouse_over(s));
+}
+
+/// 单条滚动条的统一外观（列表 Scroll 和日志 TextDisplay 共用，风格才不会两套）
+pub(crate) fn style_plain_scrollbar(sb: &mut Scrollbar, pal: Palette) {
+    sb.set_frame(FrameType::FlatBox);
+    sb.set_color(pal.card);
+    sb.set_selection_color(pal.border);
+    // 滑块走专门注册的框型（见 draw_scroll_thumb）：同一框型也被 FLTK 拿去画两端那个
+    // 8x8 的箭头按钮，所以那里按尺寸直接不画，滚轮条就只剩一根圆头滑块
+    sb.set_slider_frame(FrameType::RoundedBox);
+    // 箭头图案是按 labelcolor 画的，跟槽底同色就看不见了
+    sb.set_label_color(pal.card);
+}
+
+/// 滚动条滑块：圆头细条；两端箭头按钮用的是同一个框型（尺寸只有 8x8），直接跳过不画
+pub fn draw_scroll_thumb(x: i32, y: i32, w: i32, h: i32, c: Color) {
+    // 两端箭头按钮正好是「滚动条粗细 × 滚动条粗细」的正方形，滑块则是长条（最短也有粗细的一半），
+    // 所以按正方形判定跳过 —— 滚动条就只剩一根圆头滑块
+    if w == h {
+        return;
+    }
+    fltk::draw::set_draw_color(c);
+    // 半径比半宽小 1：半宽正好等于半径时两条弧在正中相接，FLTK 会在弧顶留一个像素缺口，
+    // 放大看就是滑块两头的小尖角
+    let r = ((w.min(h) / 2) - 1).max(1);
+    fltk::draw::draw_rounded_rectf(x, y, w, h, r);
+}
+
+/// 日志区是 Fl_Text_Display，自带两条 Fl_Scrollbar 子控件（FLTK 不把它们公开给 fltk-rs），
+/// 只能按 Group 取出子控件来刷配色，否则日志滚动条还是系统默认的宽条箭头样式
+pub(crate) fn style_text_scrollbars(disp: &TextDisplay, pal: Palette) {
+    // SAFETY: Fl_Text_Display 是 Fl_Group 的子类，子控件就是两条 Fl_Scrollbar；
+    // 只读 children 列表并用 widget 指针重建 Scrollbar 句柄，与 parent_scroll 同一套路
+    let g = unsafe { Group::from_widget_ptr(disp.as_widget_ptr()) };
+    for i in 0..g.children() {
+        let Some(ch) = g.child(i) else { continue };
+        let mut sb = unsafe { Scrollbar::from_widget_ptr(ch.as_widget_ptr()) };
+        style_plain_scrollbar(&mut sb, pal);
     }
 }
 
@@ -442,7 +597,7 @@ const SITE_COLS: [(&str, i32); 6] = [
     ("col_site_listen", 120),
     ("col_site_upstream", 190),
     ("col_site_insecure", 90),
-    ("", 114),
+    ("", 168),
 ];
 const SITE_RULE_COLS: [(&str, i32); 5] = [
     ("col_rule_prefix", 110),
@@ -475,7 +630,7 @@ fn header_row(cols: &[(&str, i32)], pal: Palette) -> (Flex, Vec<Frame>) {
 
 /// 构建整个窗口（不 show，由调用方决定时机）
 pub fn build(config: &AppConfig, pal: Palette) -> View {
-    let mut win = Window::default().with_size(800, 820).center_screen();
+    let mut win = Window::default().with_size(WIN_W, WIN_H).center_screen();
     win.set_label(&t!("app_title"));
     win.set_border(false); // 无边框
     // 窗口/任务栏图标（内嵌，无外部文件依赖）
@@ -486,7 +641,7 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     win.set_color(pal.border);
 
     // ---- 标题栏：贴顶独立一行（无边框窗口：拖动移动 + 关闭） ----
-    let mut title_bar = Flex::new(1, 1, 798, 32, None).row();
+    let mut title_bar = Flex::new(1, 1, WIN_W - 2, 32, None).row();
     title_bar.set_frame(FrameType::FlatBox);
     title_bar.set_color(pal.bg);
     title_bar.set_margin(2);
@@ -526,7 +681,7 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     // close_btn 的回调由 controller 接线（关窗前要清理系统代理）
 
     // ---- 内容区 ----
-    let mut col = Flex::new(1, 33, 798, 786, None).column();
+    let mut col = Flex::new(1, 33, WIN_W - 2, WIN_H - 34, None).column();
     col.set_frame(FrameType::FlatBox);
     col.set_color(pal.bg);
     col.set_margin(12);
@@ -695,45 +850,13 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     let mut add_site_btn = Button::default().with_label(&t!("add_site"));
     style_ghost_btn(&mut add_site_btn, pal);
     sites_bar.fixed(&add_site_btn, 96);
+    let mut site_page_save_btn = Button::default().with_label(&t!("save_apply"));
+    style_primary_btn(&mut site_page_save_btn, pal);
+    sites_bar.fixed(&site_page_save_btn, 96);
     sites_bar.end();
     sites_card.fixed(&sites_bar, 40);
     sites_card.end();
-    // 卡片高度 = 边距24 + 标题26 + 表头20 + 两行(40*2+8) + 按钮栏40 + pad12 + 余量4（不留余量会顶出滚动条）
-    page_site.fixed(&sites_card, 214);
-
-    // 选中站点的转发规则卡片
-    let mut site_rules_card = Flex::default().column();
-    style_card(&mut site_rules_card, pal);
-    site_rules_card.set_pad(6);
-    site_rules_card.set_margin(12);
-    // 标题行：文案随选中站点变化（「本站转发规则 · 站点名」），由逻辑层刷新
-    site_rules_card.begin();
-    let site_rule_cap = caption(&t!("site_rules_title"), pal);
-    site_rules_card.fixed(&site_rule_cap, 26);
-    site_rules_card.begin();
-    let (site_rule_header, site_rule_header_frames) = header_row(&SITE_RULE_COLS, pal);
-    site_rules_card.fixed(&site_rule_header, 20);
-    site_rules_card.begin();
-    let mut site_rule_scroll = Scroll::default();
-    style_scroll(&mut site_rule_scroll, pal);
-    let mut site_rule_pack =
-        Pack::new(0, 0, SITE_RULE_ROW_W, 0, None).with_type(PackType::Vertical);
-    site_rule_pack.set_spacing(SITE_RULE_ROW_GAP);
-    site_rule_pack.end();
-    site_rule_scroll.end();
-    site_rules_card.begin();
-    let mut site_rules_bar = Flex::default().row();
-    site_rules_bar.set_pad(6);
-    Frame::default(); // 弹性填充
-    let mut add_site_rule_btn = Button::default().with_label(&t!("add_rule"));
-    style_ghost_btn(&mut add_site_rule_btn, pal);
-    site_rules_bar.fixed(&add_site_rule_btn, 96);
-    let mut site_save_btn = Button::default().with_label(&t!("save_apply"));
-    style_primary_btn(&mut site_save_btn, pal);
-    site_rules_bar.fixed(&site_save_btn, 96);
-    site_rules_bar.end();
-    site_rules_card.fixed(&site_rules_bar, 40);
-    site_rules_card.end();
+    // 站点卡片吃满整页：本站转发规则已经挪进每行的「配置」浮窗
     page_site.end();
 
     page_area.end();
@@ -768,10 +891,79 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     log_disp.set_text_size(13);
     let log_buf = TextBuffer::default();
     log_disp.set_buffer(log_buf.clone());
+    // 日志区滚动条也按列表的细条尺寸走（默认那条 14px 粗条跟列表不是一个风格）
+    log_disp.set_scrollbar_size(8);
     log_card.end();
-    col.fixed(&log_card, 130);
+    style_text_scrollbars(&log_disp, pal);
+    col.fixed(&log_card, 180);
 
     col.end();
+
+    // ---- 本站转发规则：主窗口内的蒙版层 + 居中圆角弹窗 ----
+    // 做成窗口内的覆盖层（而不是独立小窗）：跟主窗口天然同进同退，也不会被别的窗口压住
+    let mut overlay = Group::new(0, 0, WIN_W, WIN_H, None);
+    overlay.set_frame(FrameType::NoBox);
+    // 蒙版本身要能收点击（点空白处关闭弹窗），所以用 Button 而不是 Frame
+    let mut mask = Button::new(0, 0, WIN_W, WIN_H, None);
+    mask.set_frame(FrameType::ShadowBox); // 已被重写成「半透明铺满」的绘制
+    mask.set_color(pal.bg);
+    mask.visible_focus(false);
+
+    // 弹窗本体：宽度由规则行反推（行宽 + 滚动条 + 卡片内边距 + 弹窗外边距），
+    // 这样表格正好填满卡片，右侧不会留一条空白
+    let (dw, dh) = (DIALOG_W, DIALOG_H);
+    let mut rules_root = Flex::new((WIN_W - dw) / 2, (WIN_H - dh) / 2, dw, dh, None).column();
+    rules_root.set_frame(FrameType::OvalBox); // 已被重写成「圆角填充 + 1px 描边」
+    rules_root.set_color(pal.card);
+    rules_root.set_margin(12);
+    rules_root.set_pad(8);
+
+    rules_root.begin();
+    let mut rules_head = Flex::default().row();
+    rules_head.set_frame(FrameType::NoBox);
+    rules_head.set_color(pal.card);
+    rules_head.set_pad(0);
+    // 标题随选中站点变化（「本站转发规则 · 站点名」），由逻辑层刷新
+    let site_rule_cap = caption(&t!("site_rules_title"), pal);
+    let mut rules_close_btn = Button::default().with_label("✕");
+    style_ghost_btn(&mut rules_close_btn, pal);
+    rules_head.fixed(&rules_close_btn, 32);
+    rules_head.end();
+    rules_root.fixed(&rules_head, 30);
+
+    rules_root.begin();
+    let mut site_rules_card = Flex::default().column();
+    style_card(&mut site_rules_card, pal);
+    site_rules_card.set_pad(6);
+    site_rules_card.set_margin(8);
+    site_rules_card.begin();
+    let (site_rule_header, site_rule_header_frames) = header_row(&SITE_RULE_COLS, pal);
+    site_rules_card.fixed(&site_rule_header, 20);
+    site_rules_card.begin();
+    let mut site_rule_scroll = Scroll::default();
+    style_scroll(&mut site_rule_scroll, pal);
+    let mut site_rule_pack =
+        Pack::new(0, 0, SITE_RULE_ROW_W, 0, None).with_type(PackType::Vertical);
+    site_rule_pack.set_spacing(SITE_RULE_ROW_GAP);
+    site_rule_pack.end();
+    site_rule_scroll.end();
+    site_rules_card.begin();
+    let mut site_rules_bar = Flex::default().row();
+    site_rules_bar.set_pad(6);
+    Frame::default(); // 弹性填充
+    let mut add_site_rule_btn = Button::default().with_label(&t!("add_rule"));
+    style_ghost_btn(&mut add_site_rule_btn, pal);
+    site_rules_bar.fixed(&add_site_rule_btn, 96);
+    let mut site_save_btn = Button::default().with_label(&t!("save_apply"));
+    style_primary_btn(&mut site_save_btn, pal);
+    site_rules_bar.fixed(&site_save_btn, 96);
+    site_rules_bar.end();
+    site_rules_card.fixed(&site_rules_bar, 40);
+    site_rules_card.end();
+    rules_root.end();
+
+    overlay.end();
+    overlay.hide();
     win.end();
 
     View {
@@ -812,6 +1004,12 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
         site_scroll,
         site_pack,
         add_site_btn,
+        site_page_save_btn,
+        overlay,
+        mask,
+        rules_root,
+        rules_head,
+        rules_close_btn,
         site_rules_card,
         site_rule_cap,
         site_rule_header_frames,
@@ -877,11 +1075,7 @@ pub fn add_rule_row_widgets(pack: &Pack, pal: Palette, idx: i32, rule: &Rule) ->
     row.fixed(&f_prefix, 110);
 
     let mut del_btn = Button::default().with_label(&t!("rule_delete"));
-    del_btn.set_frame(FrameType::RFlatBox);
-    del_btn.set_down_frame(FrameType::RFlatBox);
-    del_btn.set_color(pal.input_bg);
-    del_btn.set_label_color(pal.danger);
-    del_btn.visible_focus(false);
+    style_danger_btn(&mut del_btn, pal);
     row.fixed(&del_btn, 52);
     row.end();
     pack.end();
@@ -897,6 +1091,18 @@ pub fn add_rule_row_widgets(pack: &Pack, pal: Palette, idx: i32, rule: &Rule) ->
     }
 }
 
+/// 行内间隔垫：NoBox 按钮，点上去等于点整行（FLTK 的 Group 不处理 FL_PUSH，光留空隙点不动）
+pub(crate) fn row_pad(row: &mut Flex, gaps: &mut Vec<Button>, w: i32, pal: Palette) {
+    let mut b = Button::default();
+    b.set_frame(FrameType::NoBox);
+    b.set_down_frame(FrameType::NoBox);
+    b.set_color(pal.card);
+    b.set_label("");
+    b.visible_focus(false);
+    row.fixed(&b, w);
+    gaps.push(b);
+}
+
 /// 一个站点行的控件句柄
 pub struct SiteWidgets {
     pub row: Flex,
@@ -905,6 +1111,8 @@ pub struct SiteWidgets {
     pub listen: Input,
     pub upstream: Input,
     pub insecure: CheckButton,
+    /// 打开「本站转发规则」浮窗
+    pub rules_btn: Button,
     pub open_btn: Button,
     pub del_btn: Button,
     /// 列之间那些「不可见的点击垫」：FLTK 的 Group 不处理 FL_PUSH，
@@ -930,16 +1138,7 @@ pub fn add_site_row_widgets(pack: &Pack, pal: Palette, idx: i32, site: &Site) ->
     row.set_margin(4);
 
     let mut gaps = Vec::new();
-    let add_gap = |row: &mut Flex, gaps: &mut Vec<Button>| {
-        let mut b = Button::default();
-        b.set_frame(FrameType::NoBox);
-        b.set_down_frame(FrameType::NoBox);
-        b.set_color(pal.card);
-        b.set_label("");
-        b.visible_focus(false);
-        row.fixed(&b, 10);
-        gaps.push(b);
-    };
+    let add_gap = |row: &mut Flex, gaps: &mut Vec<Button>| row_pad(row, gaps, 10, pal);
 
     let mut enable = CheckButton::default();
     style_check(&mut enable, pal, CHECK_LABEL_SIZE);
@@ -972,16 +1171,18 @@ pub fn add_site_row_widgets(pack: &Pack, pal: Palette, idx: i32, site: &Site) ->
     row.fixed(&insecure, 90);
     add_gap(&mut row, &mut gaps);
 
+    let mut rules_btn = Button::default().with_label(&t!("site_rule_cfg"));
+    style_ghost_btn(&mut rules_btn, pal);
+    row.fixed(&rules_btn, 52);
+    row_pad(&mut row, &mut gaps, 6, pal);
+
     let mut open_btn = Button::default().with_label(&t!("site_open"));
     style_ghost_btn(&mut open_btn, pal);
     row.fixed(&open_btn, 52);
+    row_pad(&mut row, &mut gaps, 6, pal);
 
     let mut del_btn = Button::default().with_label(&t!("rule_delete"));
-    del_btn.set_frame(FrameType::RFlatBox);
-    del_btn.set_down_frame(FrameType::RFlatBox);
-    del_btn.set_color(pal.input_bg);
-    del_btn.set_label_color(pal.danger);
-    del_btn.visible_focus(false);
+    style_danger_btn(&mut del_btn, pal);
     row.fixed(&del_btn, 52);
 
     row.end();
@@ -994,6 +1195,7 @@ pub fn add_site_row_widgets(pack: &Pack, pal: Palette, idx: i32, site: &Site) ->
         listen,
         upstream,
         insecure,
+        rules_btn,
         open_btn,
         del_btn,
         gaps,
@@ -1051,11 +1253,7 @@ pub fn add_site_rule_row_widgets(
     row.fixed(&fwd_prefix, 110);
 
     let mut del_btn = Button::default().with_label(&t!("rule_delete"));
-    del_btn.set_frame(FrameType::RFlatBox);
-    del_btn.set_down_frame(FrameType::RFlatBox);
-    del_btn.set_color(pal.input_bg);
-    del_btn.set_label_color(pal.danger);
-    del_btn.visible_focus(false);
+    style_danger_btn(&mut del_btn, pal);
     row.fixed(&del_btn, 52);
 
     row.end();
