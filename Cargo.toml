@@ -29,9 +29,17 @@ rust-i18n = "4"
 sys-locale = "0.3"
 
 [profile.release]
-lto = true
+# 体积优先：单文件分发，用户直接下载即用，几 MB 越小越好
+opt-level = "z"   # 以体积为目标（关闭循环向量化等体积大户）
+lto = true        # 跨 crate 内联 + 死代码消除
 codegen-units = 1
-strip = true
+panic = "abort"   # 去掉 panic 展开表
+strip = true      # 去掉符号表
+
+# 构建脚本（fltk-sys 要现场编译 FLTK）别跟着上体积优化，纯属拖慢编译
+[profile.release.build-override]
+opt-level = 0
+codegen-units = 256
 
 [build-dependencies]
 winres = "0.1.12"

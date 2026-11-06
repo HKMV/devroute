@@ -103,9 +103,11 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 ## Changelog
 
-- **0.8.1**: fixed the GitHub icon in the title bar not being vertically aligned with the minimize / close buttons (the icon is now drawn by us, which also removed a paint artifact above the button); docs screenshots are now captured with `PrintWindow`, so another window on the desktop can no longer leak into them
-- **0.8.0**: badge at the bottom of mirrored pages (`Powered by devroute` in English); GitHub icon button in the title bar; fixed the large empty gap left behind after deleting list rows
-- Older releases: see [Releases](https://github.com/HKMV/devroute/releases)
+Per-release details live in **[CHANGELOG.md](CHANGELOG.md)** (the release workflow copies the matching section into each GitHub Release):
+
+- **0.8.1**: GitHub icon in the title bar now lines up with the minimize / close buttons; docs screenshots are captured with `PrintWindow`
+- **0.8.0**: badge at the bottom of mirrored pages (`Powered by devroute`), GitHub icon button in the title bar, fixed the large empty gap left after deleting list rows
+- All releases: [Releases](https://github.com/HKMV/devroute/releases)
 
 ## Rule Configuration
 

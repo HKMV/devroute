@@ -83,6 +83,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Release 正文来自 CHANGELOG.md：取与该 tag 对应的 `## [x.y.z]` 小节，再补一段下载说明。
+      # 找不到小节就退回一句占位文案，绝不因为文档缺失让发布失败。
+      - name: Build release notes from CHANGELOG.md
+        run: |
+          python3 - "${{ github.ref_name }}" > notes.md <<'PY'
+          import re
+          import sys
+
+          tag = sys.argv[1]
+          version = tag[1:] if tag.startswith("v") else tag
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          lines = text.splitlines()
+
+          start = None
+          for i, line in enumerate(lines):
+              if re.match(r"^##\s+\[%s\]" % re.escape(version), line):
+                  start = i + 1
+                  break
+
+          section = []
+          if start is not None:
+              for line in lines[start:]:
+                  if re.match(r"^##\s+\[", line):
+                      break
+                  section.append(line)
+          body = "\n".join(section).strip()
+          print(body if body else "(本版本没有单独的更新说明，详见 CHANGELOG.md)")
+          PY
+          {
+            cat notes.md
+            cat <<'MD'
+
+          ---
+
+          ### 下载 / Download
+
+          | 平台 / Platform | 文件 / File |
+          |---|---|
+          | Windows | `devroute-windows.exe`（双击即用） |
+          | Linux | `devroute-linux`（`chmod +x` 后运行） |
+          | macOS | `devroute-macos`（`chmod +x` 后运行） |
+
+          单文件、静态链接，不需要安装任何运行时。
+          Single-file static binaries — no runtime required.
+          MD
+          } > body.md
+          cp body.md notes.md
+          echo "----- release body -----"
+          cat body.md
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -107,7 +157,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           release_name: ${{ github.ref_name }}
-          body: "Release ${{ github.ref_name }} for Windows, macOS and Linux."
+          body_path: body.md
           draft: false
           prerelease: false
         env:

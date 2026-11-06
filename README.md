@@ -103,9 +103,11 @@ cargo build --release
 
 ## 更新日志
 
-- **0.8.1**：修标题栏 GitHub 图标与最小化 / 关闭按钮不垂直对齐（图标改为自绘，顺带清掉按钮上方的绘制残影）；文档截图改用 `PrintWindow` 抓取，桌面上有其它窗口遮挡时也能拍干净
-- **0.8.0**：镜像页面底部署名条「由 devroute 提供支持」（英文 `Powered by devroute`）；标题栏新增 GitHub 图标按钮；修删除列表行后留下大块空白
-- 更早版本见 [Releases](https://github.com/HKMV/devroute/releases)
+每个版本的详细说明见 **[CHANGELOG.md](CHANGELOG.md)**（发布流程会把它自动填进对应 Release 正文）：
+
+- **0.8.1**：标题栏 GitHub 图标与最小化 / 关闭按钮垂直对齐修复；文档截图改用 `PrintWindow` 抓取
+- **0.8.0**：镜像页面底部署名条（`Powered by devroute`）、标题栏 GitHub 图标按钮、修删除列表行后的大块空白
+- 全部历史版本：[Releases](https://github.com/HKMV/devroute/releases)
 
 ## 配置规则
 
