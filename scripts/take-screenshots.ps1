@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 public class Win {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 }
@@ -81,9 +82,20 @@ forward = { addr = "127.0.0.1:8886", path_prefix = "" }
   if ($w -le 0 -or $ht -le 0) { throw "bad rect $w x $ht" }
   $bmp = New-Object System.Drawing.Bitmap($w, $ht)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
-  $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
+  # PrintWindow(PW_RENDERFULLCONTENT) 抓窗口自身内容：桌面上有别的窗口压着也拍不到别人的界面，
+  # 也不会把窗口外那 1px 隐形边框里的桌面像素混进来
+  $hdc = $g.GetHdc()
+  $ok = [Win]::PrintWindow($h, $hdc, 2)
+  $g.ReleaseHdc($hdc)
+  if ($ok) {
+    $g.Dispose()
+  } else {
+    $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
+    $g.Dispose()
+    Write-Output "(fallback: CopyFromScreen $theme/$lang)"
+  }
   $bmp.Save($outFile, [System.Drawing.Imaging.ImageFormat]::Png)
-  $g.Dispose(); $bmp.Dispose()
+  $bmp.Dispose()
   Stop-Process -Id $p.Id -Force
   $p.WaitForExit(5000) | Out-Null
   try { Remove-Item -Recurse -Force $work -ErrorAction Stop } catch { Write-Output "(cleanup skipped: $($_.Exception.Message))" }

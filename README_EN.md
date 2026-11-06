@@ -41,7 +41,7 @@ Building from source is described [below](#packaging--distribution).
 - **Mirrored-page badge**: HTML pages served through a mirror site get a fixed bottom-center badge — `Powered by devroute` in the English UI, 由 devroute 提供支持 in Chinese. Inline styles only, no external assets, never blocks clicks; injected only into full documents, so HTML fragments from AJAX plus JS/CSS/JSON are left untouched
 - **Crash leftover cleanup**: system proxy settings left behind by an unexpected exit are detected and cleared on next launch — a dead proxy is never "restored"
 - **Running-state icon**: taskbar and in-app icon change color with proxy start/stop (Windows / Linux X11; on macOS the Dock shows the app icon, but the in-app icon still reflects state)
-- **GUI desktop app** (default): two tabs up top (mirror sites / proxy mode, sites on the left and open by default), each managing its own settings — site & rule CRUD, save with hot reload, open a site in the browser with one click, connection/traffic stats, live logs, one-click system proxy, light/dark theme, Chinese/English UI; a **GitHub icon button** sits left of the minimize button in the title bar and opens the project page
+- **GUI desktop app** (default): two tabs up top (mirror sites / proxy mode, sites on the left and open by default), each managing its own settings — site & rule CRUD, save with hot reload, open a site in the browser with one click, connection/traffic stats, live logs, one-click system proxy, light/dark theme, Chinese/English UI; the three title-bar buttons (GitHub / minimize / close) share the same size and baseline with a hover highlight, and the **GitHub button** opens the project page and shows the repo URL on hover
 - **Lightweight**: ~3.4MB idle with GUI (~4MB while proxying, grows with traffic); `--headless` mode sits at ~2.5MB, ideal for leaving running
 - Auto-generates a default `config.toml`; config changes take effect immediately
 - Failed forwards return 503 or fall back to the original address
@@ -99,6 +99,13 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 - **Theme**: segmented control top-right — Auto / Dark / Light, applied instantly and remembered
 - **Language**: button next to the theme control toggles Chinese/English, applied instantly and remembered
+- **Title bar**: three buttons top-right (GitHub project page / minimize / close); drag any empty spot to move the window
+
+## Changelog
+
+- **0.8.1**: fixed the GitHub icon in the title bar not being vertically aligned with the minimize / close buttons (the icon is now drawn by us, which also removed a paint artifact above the button); docs screenshots are now captured with `PrintWindow`, so another window on the desktop can no longer leak into them
+- **0.8.0**: badge at the bottom of mirrored pages (`Powered by devroute` in English); GitHub icon button in the title bar; fixed the large empty gap left behind after deleting list rows
+- Older releases: see [Releases](https://github.com/HKMV/devroute/releases)
 
 ## Rule Configuration
 

@@ -1380,8 +1380,8 @@ pub fn apply_theme(
         b.set_label_color(pal.subtext);
         b.redraw();
     }
-    // GitHub 图标是位图化的，换主题要按新配色重新生成
-    view::set_github_icon(&mut v.gh_btn.clone(), pal);
+    // GitHub 图标自绘时按 current_pal 现算，这里只要触发重绘
+    v.gh_btn.clone().redraw();
     // 页签 + 主题分段控件
     view::refresh_tab_btns(&mut v.tab_btns.clone(), current_tab(), pal);
     v.tab_bar.clone().set_color(pal.seg_bg);
