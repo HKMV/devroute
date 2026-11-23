@@ -864,10 +864,24 @@ pub fn wire(
         v.tab_btns[idx].set_callback(move |_| show_tab(&v2, idx));
     }
 
-    // 蒙版层：点弹窗外的暗区就关掉弹窗
+    // 蒙版层：点弹窗外的暗区才关掉弹窗。
+    // 卡片自己是普通 Group，没被子控件吃掉的 FL_PUSH 会继续往下落到蒙版上，
+    // 所以点标题、卡片里那大片留白本来也等于点了蒙版（表现为「点哪都关窗」）。
+    // 这里按坐标把落在卡片矩形里的点击滤掉：卡片和蒙版是同一个 overlay 里的兄弟控件，
+    // 窗口绝对坐标对两者是同一套（overlay 铺在 (0,0)），可以直接比。
     {
         let v2 = v.clone_ref();
-        v.mask.clone().set_callback(move |_| close_site_rules_popup(&v2));
+        let card = v.rules_root.clone();
+        v.mask.clone().set_callback(move |_| {
+            let (x, y) = (app::event_x(), app::event_y());
+            let on_card = x >= card.x()
+                && x < card.x() + card.w()
+                && y >= card.y()
+                && y < card.y() + card.h();
+            if !on_card {
+                close_site_rules_popup(&v2);
+            }
+        });
     }
 
     // 代理模式启停：只动代理端口，镜像站点不受影响
