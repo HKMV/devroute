@@ -113,6 +113,7 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 Per-release details live in **[CHANGELOG.md](CHANGELOG.md)** (the release workflow copies the matching section into each GitHub Release):
 
+- **0.9.3**: "Save changes" no longer makes the log pane flicker (while the dialog is open, log updates redraw the whole window)
 - **0.9.2**: the rules dialog closes only via ✕ now (clicking outside no longer throws away what you were editing), no more blinking when clicking inside the dialog, fixed the scrim turning into noise at 100% display scaling
 - **0.9.1**: fixed the rules dialog closing on any click (only the scrim or ✕ closes it now), and the whole input box outside the dialog flickering while it is open
 - **0.9.0**: site rules moved into a centered dialog (translucent scrim + rounded card), "Save changes" back at the bottom of the sites page, lists go read-only while running, outlined row buttons, slimmer scrollbars
