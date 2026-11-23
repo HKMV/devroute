@@ -113,6 +113,7 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 Per-release details live in **[CHANGELOG.md](CHANGELOG.md)** (the release workflow copies the matching section into each GitHub Release):
 
+- **0.9.1**: fixed the rules dialog closing on any click (only the scrim or ✕ closes it now), and the whole input box outside the dialog flickering while it is open
 - **0.9.0**: site rules moved into a centered dialog (translucent scrim + rounded card), "Save changes" back at the bottom of the sites page, lists go read-only while running, outlined row buttons, slimmer scrollbars
 - **0.8.2**: size-first release profile — the Windows binary drops from 4.6 MB to 2.9 MB (-38%); release notes are now generated from CHANGELOG
 - **0.8.1**: GitHub icon in the title bar now lines up with the minimize / close buttons; docs screenshots are captured with `PrintWindow`
