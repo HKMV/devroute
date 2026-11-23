@@ -203,6 +203,12 @@ pub fn run() -> anyhow::Result<()> {
             let mut buf = v.log_buf.clone();
             buf.set_text(&text);
             v.log_disp.scroll(buf.count_lines(0, buf.length()), 0);
+            // 弹窗开着时日志区在蒙版下面：只重绘日志区会在蒙版上戳个洞
+            // （那块地方跳回原亮度，等 0.3s 的整窗重绘才盖回去，看起来就是闪一下）。
+            // 把这次 damage 提升成整窗，蒙版和卡片跟着一起重画
+            if controller::popup_site() != 0 {
+                app::redraw();
+            }
         }
     }
     Ok(())
