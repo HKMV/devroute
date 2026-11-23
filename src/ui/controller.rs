@@ -1250,20 +1250,42 @@ pub fn start_cursor_blink(
         let sm = site_model.borrow();
         let sr = site_rule_model.borrow();
         let fp = app::focus().map(|w| w.as_widget_ptr() as usize).unwrap_or(0);
+        // 弹窗开着时，卡片外的输入框不能逐帧重绘：重绘只画输入框自己、不画蒙版，
+        // 那块地方就从「压暗」跳回原亮度、直接画到卡片上，0.3s 的整窗重绘再盖回去
+        // —— 频率对不上，看到的就是整框一亮一暗地闪。
+        // 所以这时卡片外的输入框只把光标藏成背景色（不 redraw，跟着整窗重绘生效），
+        // 卡片内的规则行照常闪：它们重绘落在白卡上，不留痕迹
+        let popup_open = popup_site() != 0;
+        // can_redraw=false：弹窗开着且这个输入框在卡片外，只藏光标、不重绘
+        let blink = |mut inp: Input, can_redraw: bool| {
+            let focused = inp.as_widget_ptr() as usize == fp;
+            let want = if can_redraw {
+                if focused && !visible {
+                    pal.input_bg
+                } else {
+                    pal.text
+                }
+            } else {
+                pal.input_bg
+            };
+            if inp.cursor_color() != want {
+                inp.set_cursor_color(want);
+                if can_redraw {
+                    inp.redraw();
+                }
+            }
+        };
+        for inp in sr.iter().flat_map(|e| e.inputs.iter().cloned()) {
+            blink(inp, true);
+        }
         // 只触摸当前仍在模型里的输入框，删除后的行天然跳过，无悬垂指针
-        let inputs = m
+        let outside = m
             .iter()
             .flat_map(|e| e.inputs.iter().cloned())
             .chain(sm.iter().flat_map(|e| e.inputs.iter().cloned()))
-            .chain(sr.iter().flat_map(|e| e.inputs.iter().cloned()))
             .chain([listen_input.clone()]);
-        for mut inp in inputs {
-            let focused = inp.as_widget_ptr() as usize == fp;
-            let want = if focused && !visible { pal.input_bg } else { pal.text };
-            if inp.cursor_color() != want {
-                inp.set_cursor_color(want);
-                inp.redraw();
-            }
+        for inp in outside {
+            blink(inp, !popup_open);
         }
         app::repeat_timeout3(0.53, h);
     });
