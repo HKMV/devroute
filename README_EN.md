@@ -92,7 +92,7 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 **Local mirrors tab (left, default)**
 
 - **Site list**: each row is one local port plus one upstream. Enable it, hit "Start", and the local address shows the upstream page. The row's "Open" button launches your default browser; "Skip" disables upstream certificate verification (for self-signed internal certs)
-- **Site rules**: click the **Configure** button on a site row to open a centered dialog (translucent scrim + rounded card) with that site's own rules (path prefix → local address + forward prefix); the title shows the site name, and clicking the scrim or the ✕ closes it. Every site keeps its own rule list, unrelated to the proxy rules
+- **Site rules**: click the **Configure** button on a site row to open a centered dialog (translucent scrim + rounded card) with that site's own rules (path prefix → local address + forward prefix); the title shows the site name, and only the ✕ closes it (clicking outside does nothing — there may be unsaved edits inside). Every site keeps its own rule list, unrelated to the proxy rules
 - **Click a row to select it**: clicking anywhere on a site row (including its inputs) selects that row and focuses the input, so one click is enough to start editing
 - **Read-only while running**: once the site service is started the site list and the rules dialog are disabled as a whole ("Configure" and "Open" still work) so nobody assumes an edit already took effect; stopping restores editing
 - "Save changes" writes the config (there is one at the bottom of the page and one inside the rules dialog — both do the same): rule-only changes hot reload without dropping connections; changing a port/upstream/enabled flag restarts the sites
@@ -113,6 +113,7 @@ The window has two tabs at the top. Settings and start/stop are fully separate; 
 
 Per-release details live in **[CHANGELOG.md](CHANGELOG.md)** (the release workflow copies the matching section into each GitHub Release):
 
+- **0.9.2**: the rules dialog closes only via ✕ now (clicking outside no longer throws away what you were editing), no more blinking when clicking inside the dialog, fixed the scrim turning into noise at 100% display scaling
 - **0.9.1**: fixed the rules dialog closing on any click (only the scrim or ✕ closes it now), and the whole input box outside the dialog flickering while it is open
 - **0.9.0**: site rules moved into a centered dialog (translucent scrim + rounded card), "Save changes" back at the bottom of the sites page, lists go read-only while running, outlined row buttons, slimmer scrollbars
 - **0.8.2**: size-first release profile — the Windows binary drops from 4.6 MB to 2.9 MB (-38%); release notes are now generated from CHANGELOG
