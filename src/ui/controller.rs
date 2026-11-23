@@ -7,7 +7,7 @@ use crate::ui::view::{self, View};
 use rust_i18n::t;
 use rust_i18n::set_locale;
 use fltk::{
-    app, button::Button, enums::CallbackTrigger, frame::Frame, group::Pack, group::Scroll,
+    app, button::Button, enums::{CallbackTrigger, Event}, frame::Frame, group::Pack, group::Scroll,
     input::Input, prelude::*,
 };
 use std::cell::{Cell, RefCell};
@@ -628,7 +628,8 @@ fn focus_first_site_rule(rule_model: &SiteRuleModel, close_btn: &Button) {
     }
 }
 
-/// 关掉规则弹窗（点蒙版、点 ✕、切页签、删掉正在配置的站点）
+/// 关掉规则弹窗（点 ✕、切页签、删掉正在配置的站点）
+/// 不提供「点蒙版空白处关闭」：弹窗里有正在编辑的规则，误点外部就把窗关掉太容易丢数据
 pub fn close_site_rules_popup(v: &View) {
     v.overlay.clone().hide();
     POPUP_SITE.with(|c| c.set(0));
@@ -864,23 +865,23 @@ pub fn wire(
         v.tab_btns[idx].set_callback(move |_| show_tab(&v2, idx));
     }
 
-    // 蒙版层：点弹窗外的暗区才关掉弹窗。
-    // 卡片自己是普通 Group，没被子控件吃掉的 FL_PUSH 会继续往下落到蒙版上，
-    // 所以点标题、卡片里那大片留白本来也等于点了蒙版（表现为「点哪都关窗」）。
-    // 这里按坐标把落在卡片矩形里的点击滤掉：卡片和蒙版是同一个 overlay 里的兄弟控件，
-    // 窗口绝对坐标对两者是同一套（overlay 铺在 (0,0)），可以直接比。
+    // 蒙版层：只负责吃掉落到卡片上的点击。卡片是普通 Group，没被子控件吃掉的
+    // FL_PUSH 会继续往下走，漏到蒙版后面的站点列表里（行选中、输入框聚焦）。
+    // 这里不再做「点空白关窗」：弹窗里有正在编辑的规则，误点一下就把窗关掉太容易丢数据，
+    // 关闭统一走右上角 ✕。返回 true 只表示吞掉事件 —— Frame 不吃事件、也不会重绘，
+    // 所以点卡片上的空白处不会有任何视觉变化
     {
-        let v2 = v.clone_ref();
-        let card = v.rules_root.clone();
-        v.mask.clone().set_callback(move |_| {
-            let (x, y) = (app::event_x(), app::event_y());
-            let on_card = x >= card.x()
-                && x < card.x() + card.w()
-                && y >= card.y()
-                && y < card.y() + card.h();
-            if !on_card {
-                close_site_rules_popup(&v2);
-            }
+        let mut mask = v.mask.clone();
+        mask.handle(move |_, ev| {
+            matches!(
+                ev,
+                Event::Push
+                    | Event::Released
+                    | Event::Enter
+                    | Event::Leave
+                    | Event::Move
+                    | Event::MouseWheel
+            )
         });
     }
 

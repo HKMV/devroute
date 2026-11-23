@@ -183,16 +183,20 @@ pub fn draw_mask(x: i32, y: i32, w: i32, h: i32, _c: Color) {
     if w <= 0 || h <= 0 {
         return;
     }
+    // 位图故意比目标区域宽 1 像素：FLTK 的图片绘制在「1:1 不缩放」时走 SetDIBitsToDevice，
+    // 半透明位图会被画成一片噪点（100% 缩放时能看见），缩放过 1px 走 StretchDIBits 才干净。
+    // 所以永远给一个 1px 的缩放比，视觉上看不出差别
+    let (iw, ih) = (w + 1, h);
     MASK_IMG.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let stale = !matches!(&*slot, Some((iw, ih, _)) if *iw == w && *ih == h);
+        let stale = !matches!(&*slot, Some((cw, ch, _)) if *cw == iw && *ch == ih);
         if stale {
-            let mut buf = vec![0u8; w as usize * h as usize * 4];
+            let mut buf = vec![0u8; iw as usize * ih as usize * 4];
             for px in buf.chunks_exact_mut(4) {
                 px[3] = MASK_ALPHA;
             }
-            let img = RgbImage::new(&buf, w, h, ColorDepth::Rgba8).expect("蒙版位图");
-            *slot = Some((w, h, img));
+            let img = RgbImage::new(&buf, iw, ih, ColorDepth::Rgba8).expect("蒙版位图");
+            *slot = Some((iw, ih, img));
         }
         if let Some((_, _, img)) = slot.as_mut() {
             img.draw(x, y, w, h);
@@ -318,7 +322,7 @@ pub struct View {
     pub site_page_save_btn: Button,
     // ---- 本站转发规则弹窗（点站点行「配置」弹出的蒙版层） ----
     pub overlay: Group,
-    pub mask: Button,
+    pub mask: Frame,
     pub rules_root: Flex,
     pub rules_head: Flex,
     pub rules_close_btn: Button,
@@ -903,11 +907,11 @@ pub fn build(config: &AppConfig, pal: Palette) -> View {
     // 做成窗口内的覆盖层（而不是独立小窗）：跟主窗口天然同进同退，也不会被别的窗口压住
     let mut overlay = Group::new(0, 0, WIN_W, WIN_H, None);
     overlay.set_frame(FrameType::NoBox);
-    // 蒙版本身要能收点击（点空白处关闭弹窗），所以用 Button 而不是 Frame
-    let mut mask = Button::new(0, 0, WIN_W, WIN_H, None);
+    // 蒙版只负责自绘半透明黑 + 吃掉落到卡片外的点击，所以用 Frame（见 controller::wire）：
+    // 换成 Button 的话，按下和松开各会把框型画一遍 —— 半透明再叠一层，点一下整窗就更黑一下
+    let mut mask = Frame::new(0, 0, WIN_W, WIN_H, None);
     mask.set_frame(FrameType::ShadowBox); // 已被重写成「半透明铺满」的绘制
     mask.set_color(pal.bg);
-    mask.visible_focus(false);
 
     // 弹窗本体：宽度由规则行反推（行宽 + 滚动条 + 卡片内边距 + 弹窗外边距），
     // 这样表格正好填满卡片，右侧不会留一条空白
